@@ -1,0 +1,66 @@
+/* ============================================
+   DASHBOARD STYLES - Hydrosolar
+   Only custom styles that Tailwind can't do
+   ============================================ */
+
+/* Sidebar transition */
+.sidebar {
+    transition: transform 0.3s ease;
+}
+
+.sidebar-collapsed {
+    transform: translateX(-100%);
+}
+
+/* Main content transition */
+.main-content {
+    transition: margin-left 0.3s ease;
+}
+
+.main-content-full {
+    margin-left: 0;
+}
+
+/* Dropdown animation */
+.dropdown-menu {
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-10px);
+    transition: all 0.2s ease;
+}
+
+.dropdown-menu.show {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+/* Chart canvas */
+.chart-canvas {
+    width: 100%;
+    height: 300px;
+}
+
+/* Custom scrollbar */
+.custom-scroll::-webkit-scrollbar {
+    width: 6px;
+}
+
+.custom-scroll::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+.custom-scroll::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+}
+
+/* Empty state animation */
+.empty-state {
+    animation: fadeIn 0.5s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}

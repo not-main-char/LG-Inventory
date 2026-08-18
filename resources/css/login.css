@@ -1,0 +1,74 @@
+/* ============================================
+   LOGIN PAGE STYLES - Hydrosolar
+   ============================================ */
+
+/* Background Section - 75% width */
+.bg-section {
+    width: 75%;
+    position: relative;
+    background-image: url('/images/background.jpg');
+    background-size: cover;
+    background-position: center;
+}
+
+/* Dark overlay */
+.bg-section::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.3);
+}
+
+/* Fade to white on right edge */
+.bg-section::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 40%;
+    background: linear-gradient(to right, transparent, rgba(255, 255, 255, 1));
+}
+
+/* Logo */
+.logo-img {
+    width: 150px;
+    height: 150px;
+    object-fit: contain;
+}
+
+/* Input focus */
+.input-field:focus {
+    outline: none;
+    border-color: #1a5c1a;
+    box-shadow: 0 0 0 3px rgba(26, 92, 26, 0.1);
+    background-color: #ffffff;
+}
+
+/* Button hover */
+.btn-login:hover {
+    background-color: #144a14;
+}
+
+.btn-login:active {
+    transform: scale(0.98);
+}
+
+/* Error message */
+.error-message {
+    display: none;
+}
+
+.error-message.show {
+    display: block;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+    .bg-section {
+        display: none;
+    }
+}
