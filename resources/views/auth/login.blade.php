@@ -46,7 +46,10 @@
             <div>
                 <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider">Password</label>
                 
-                <input type="password" name="password" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition font-medium text-sm" placeholder="••••••••" required autocomplete="current-password">
+                <div class="relative">
+                    <input id="loginPassword" type="password" name="password" class="w-full px-4 py-3 pr-20 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition font-medium text-sm" placeholder="••••••••" required autocomplete="current-password">
+                    <button type="button" id="togglePassword" class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-emerald-700 hover:text-emerald-900" aria-controls="loginPassword" aria-pressed="false">Show</button>
+                </div>
                 <div class="text-right mt-2">
                     <a href="#" id="forgotPassword" class="text-xs font-semibold text-emerald-600 hover:text-emerald-700 transition">Forgot password?</a>
             </div>
@@ -63,6 +66,14 @@
 </div>
 
 <script>
+    document.getElementById('togglePassword').addEventListener('click', function() {
+        const password = document.getElementById('loginPassword');
+        const isHidden = password.type === 'password';
+        password.type = isHidden ? 'text' : 'password';
+        this.textContent = isHidden ? 'Hide' : 'Show';
+        this.setAttribute('aria-pressed', String(isHidden));
+    });
+
     document.getElementById('forgotPassword').addEventListener('click', async function(e) {
         e.preventDefault();
         const email = document.querySelector('input[name="email"]').value;

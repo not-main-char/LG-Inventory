@@ -6,12 +6,17 @@ use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\IncomeController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\ReportController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/forgot-password', [AuthController::class, 'sendPasswordResetLink'])->name('password.email');
 Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth.firebase')->name('logout');
+
+// QR codes open these temporary signed URLs without requiring a login.
+Route::get('/shared-reports/{type}/{format}', [ReportController::class, 'share'])->middleware('signed')->name('reports.share');
+Route::get('/shared-reports/{type}/{format}/download', [ReportController::class, 'sharedDownload'])->middleware('signed')->name('reports.shared-download');
 
 Route::middleware(['auth.firebase'])->group(function () {
     Route::get('/change-password', [AuthController::class, 'showChangePassword'])->name('change-password');
@@ -52,6 +57,10 @@ Route::middleware(['auth.firebase'])->group(function () {
         Route::post('/notifications/{id}/restore', [NotificationController::class, 'restore']);
     });
     
+    Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');
+    Route::get('/reports/inventory/{format}', [ReportController::class, 'downloadInventory'])->name('reports.inventory');
+    Route::get('/reports/sales/{format}', [ReportController::class, 'downloadSales'])->name('reports.sales');
+
     Route::get('/notifications', [NotificationController::class, 'index']);
     Route::post('/notifications/{id}/read', [NotificationController::class, 'markRead']);
     Route::delete('/notifications/{id}', [NotificationController::class, 'destroy']);

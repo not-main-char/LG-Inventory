@@ -149,6 +149,8 @@ class InventoryController extends Controller
             'currentStock' => (float)$validated['currentStock'],
             'unit' => $unit,
             'usageFrequency' => $validated['usageFrequency'] ?? 'manual',
+            'procurementSource' => $validated['procurementSource'],
+            'procurementCost' => $validated['procurementSource'] === 'Farm Purchase' ? (float) ($validated['procurementCost'] ?? 0) : null,
             'createdAt' => Carbon::now('Asia/Manila'),
         ];
 
@@ -193,6 +195,8 @@ class InventoryController extends Controller
             'conversionRate' => 'nullable|numeric|min:0.01',
             'seedsPerCycle' => 'nullable|numeric|min:0',
             'daysToMaturity' => 'nullable|integer|min:0',
+            'procurementSource' => 'required|in:DA,Farm Purchase',
+            'procurementCost' => 'nullable|numeric|min:0',
         ]);
 
         $itemData = $this->buildItemData($validated);
@@ -236,6 +240,8 @@ class InventoryController extends Controller
             'conversionRate' => 'nullable|numeric|min:0.01',
             'seedsPerCycle' => 'nullable|numeric|min:0',
             'daysToMaturity' => 'nullable|integer|min:0',
+            'procurementSource' => 'required|in:DA,Farm Purchase',
+            'procurementCost' => 'nullable|numeric|min:0',
         ]);
 
         $unit = $validated['unit'] ?? 'pcs';
@@ -257,6 +263,8 @@ class InventoryController extends Controller
             'type' => $validated['type'],
             'unit' => $unit,
             'usageFrequency' => $validated['usageFrequency'],
+            'procurementSource' => $validated['procurementSource'],
+            'procurementCost' => $validated['procurementSource'] === 'Farm Purchase' ? (float) ($validated['procurementCost'] ?? 0) : null,
         ];
 
         // Update consumption fields based on frequency

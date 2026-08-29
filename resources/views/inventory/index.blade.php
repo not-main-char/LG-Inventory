@@ -53,6 +53,7 @@
             <tr>
                 <th class="p-3 text-left">Item</th>
                 <th class="p-3 text-left">Stock / Unit</th>
+                <th class="p-3 text-left">Procurement</th>
                 <th class="p-3 text-left">Date Stocked</th>
                 <th class="p-3 text-left">Consumption</th>
                 <th class="p-3 text-left">Days Remaining</th>
@@ -81,6 +82,12 @@
                 </td>
                 <td class="p-3 align-middle">
                     <span class="figure text-sm">{{ rtrim(rtrim(number_format((float)$data['currentStock'], 4, '.', ''), '0'), '.') }} {{ $data['unit'] }}</span>
+                </td>
+                <td class="p-3 align-middle text-sm text-gray-600">
+                    <div>{{ $data['procurementSource'] ?? 'Not specified' }}</div>
+                    @if(($data['procurementSource'] ?? '') === 'Farm Purchase')
+                        <div class="text-[11px] text-gray-400">Cost: {{ number_format((float) ($data['procurementCost'] ?? 0), 2) }}</div>
+                    @endif
                 </td>
                 <td class="p-3 align-middle text-sm text-gray-600">
                     {{ isset($data['lastStockUpdate']) ? $data['lastStockUpdate']->toDateTime()->format('M d, Y') : 'N/A' }}
@@ -129,7 +136,7 @@
             </tr>
             @endforeach
             @if(count($items) === 0)
-            <tr><td colspan="6" class="p-8 text-center text-sm text-gray-400">No items recorded yet. Add the first item to start the ledger.</td></tr>
+            <tr><td colspan="7" class="p-8 text-center text-sm text-gray-400">No items recorded yet. Add the first item to start the ledger.</td></tr>
             @endif
         </tbody>
     </table>
@@ -154,6 +161,19 @@
                     <option value="plant">Plant / Seed</option>
                     <option value="supplies">Supplies</option>
                 </select>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Procurement Source</label>
+                    <select id="procurementSource" name="procurementSource" class="input-field" onchange="toggleProcurementCost()" required>
+                        <option value="DA">Department of Agriculture (DA)</option>
+                        <option value="Farm Purchase">Bought from the Farm</option>
+                    </select>
+                </div>
+                <div id="procurementCostWrap" class="hidden">
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Farm Cost</label>
+                    <input type="number" id="procurementCost" name="procurementCost" step="0.01" min="0" class="input-field" placeholder="e.g. 2500.00">
+                </div>
             </div>
             <div class="grid grid-cols-2 gap-3">
                 <div>
@@ -333,6 +353,16 @@
 
 @push('scripts')
 <script>
+    function toggleProcurementCost() {
+        const source = document.getElementById('procurementSource');
+        const costWrap = document.getElementById('procurementCostWrap');
+        const cost = document.getElementById('procurementCost');
+        const isFarmPurchase = source && source.value === 'Farm Purchase';
+        costWrap.classList.toggle('hidden', !isFarmPurchase);
+        cost.required = isFarmPurchase;
+        if (!isFarmPurchase) cost.value = '';
+    }
+
     function toggleFrequencyFields() {
         const freq = document.getElementById('usageFrequency').value;
         const dailyFields = document.getElementById('dailyFields');
@@ -377,6 +407,7 @@
         const methodInput = document.querySelector('#itemForm input[name="_method"]');
         if (methodInput) methodInput.remove();
         toggleFrequencyFields();
+        toggleProcurementCost();
         modal.classList.remove('hidden');
         modal.classList.add('flex');
     }
@@ -410,6 +441,9 @@
         document.getElementById('currentStock').value = item.currentStock;
         document.getElementById('usageFrequency').value = item.usageFrequency || 'manual';
         setSelectValue('unitSelect', 'unitOtherWrap', 'unitOther', item.unit, ['pcs','sack','seeds']);
+        document.getElementById('procurementSource').value = item.procurementSource || 'DA';
+        document.getElementById('procurementCost').value = item.procurementCost ?? '';
+        toggleProcurementCost();
 
         if (item.usageFrequency === 'daily') {
             document.getElementById('dailyConsumptionAmount').value = item.dailyConsumptionAmount ?? '';
