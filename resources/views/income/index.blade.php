@@ -82,7 +82,8 @@
         <thead>
             <tr>
                 <th class="p-3 text-left">Crop / Fish</th>
-                <th class="p-3 text-left">Quantity</th>
+                <th class="p-3 text-left">Quantity Sold</th>
+                <th class="p-3 text-left">Unit Sold</th>
                 <th class="p-3 text-left">Total Sale</th>
                 <th class="p-3 text-left">Date</th>
                 <th class="p-3 text-left">Notes</th>
@@ -100,10 +101,14 @@
                     </div>
                 </td>
                 <td class="p-3 align-middle">
-                    <div class="flex items-center gap-1">
-                        <span class="figure text-sm">{{ $data['quantitySold'] }}</span>
-                        <span class="text-xs text-gray-500">{{ $data['unit'] ?? '—' }}</span>
-                    </div>
+                    <span class="figure text-sm">{{ $data['quantitySold'] ?? '—' }}</span>
+                </td>
+                <td class="p-3 align-middle">
+                    @php
+                        $saleUnit = strtolower(trim($data['unit'] ?? $data['saleUnit'] ?? ''));
+                        $saleUnitLabel = in_array($saleUnit, ['kg', 'kilo', 'kilos', 'kilogram', 'kilograms'], true) ? 'Kilos' : (in_array($saleUnit, ['pcs', 'piece', 'pieces'], true) ? 'Pcs' : ($data['unit'] ?? $data['saleUnit'] ?? 'Not specified'));
+                    @endphp
+                    <span class="text-sm font-semibold text-slate-700">{{ $saleUnitLabel }}</span>
                 </td>
                 <td class="p-3 align-middle figure text-sm" style="color:var(--color-forest-700)">₱{{ number_format($data['saleAmount'], 2) }}</td>
                 <td class="p-3 align-middle text-sm text-gray-600">{{ \Carbon\Carbon::parse($data['date'])->format('M d, Y') }}</td>
@@ -121,7 +126,7 @@
             </tr>
             @endforeach
             @if(count($sales) === 0)
-            <tr><td colspan="6" class="p-8 text-center text-sm text-gray-400">No sales recorded yet.</td></tr>
+            <tr><td colspan="7" class="p-8 text-center text-sm text-gray-400">No sales recorded yet.</td></tr>
             @endif
         </tbody>
     </table>

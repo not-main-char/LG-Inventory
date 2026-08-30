@@ -36,19 +36,22 @@
         </form>
     </div>
 
-    @if($qrCode)
+    @if($validationMessage)
+        <div class="ledger-card p-5 border border-amber-200 bg-amber-50 text-amber-800 text-sm">{{ $validationMessage }}</div>
+    @elseif($qrCode)
         <div class="ledger-card p-7 text-center">
             <p class="text-xs font-bold uppercase tracking-widest text-emerald-700">Generated File</p>
             <h2 class="font-display text-xl font-semibold text-slate-900 mt-2">{{ $reportLabel }}</h2>
-            <p class="text-sm text-slate-500 mt-2">Save both the report file and this QR code. Scanning the QR code opens this exact report for download.</p>
+            <p class="text-sm text-slate-500 mt-2">Save the report file and the QR image. Scanning the QR image opens this exact report.</p>
 
-            <div class="mt-6 inline-block bg-white p-3 rounded-2xl border border-slate-200 shadow-sm">{!! $qrCode !!}</div>
+            <div class="mt-6 inline-block bg-white p-3 rounded-2xl border border-slate-200 shadow-sm"><img src="data:image/png;base64,{{ $qrCode }}" alt="QR code for {{ $reportLabel }}" class="w-[260px] h-[260px]"></div>
+            <p class="max-w-md mx-auto text-xs text-slate-500 mt-3">This QR code is for {{ $reportLabel }}. Scan it to open and download this exact report file.</p>
             <p class="text-sm font-semibold text-slate-700 mt-3">{{ $reportLabel }}</p>
-            <p class="text-[11px] text-slate-400 mt-1">The QR link expires in 7 days.</p>
+            <p class="text-[11px] text-slate-400 mt-1">QR valid until {{ $expiresAt->timezone('Asia/Manila')->format('F d, Y \a\t h:i A') }}.</p>
 
             <div class="flex flex-wrap justify-center gap-3 mt-6">
                 <a class="btn-primary px-5 py-3 text-sm" href="{{ $downloadUrl }}">Download This File</a>
-                <button type="button" class="btn-ghost px-5 py-3 text-sm" onclick="window.print()">Print / Save QR Code</button>
+                <a class="btn-ghost px-5 py-3 text-sm" href="data:image/png;base64,{{ $qrCode }}" download="{{ $type }}-report-{{ $month }}-{{ $format }}-qr.png">Save QR Image</a>
             </div>
         </div>
     @else
