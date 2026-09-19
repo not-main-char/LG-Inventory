@@ -149,7 +149,7 @@
             <input type="hidden" id="itemId" name="id">
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Name</label>
-                <input type="text" id="itemName" name="name" class="input-field" required oninput="suggestKnownConversion()">
+                <input type="text" id="itemName" name="name" class="input-field uppercase" required oninput="this.value = this.value.toUpperCase(); suggestKnownConversion()">
             </div>
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Category</label>
@@ -194,7 +194,7 @@
                         <option value="other">Other…</option>
                     </select>
                     <div id="unitOtherWrap" class="hidden mt-1.5">
-                        <input type="text" id="unitOther" name="unitOther" class="input-field" placeholder="Type the unit">
+                        <input type="text" id="unitOther" name="unitOther" class="input-field uppercase" placeholder="Type the unit" oninput="this.value = this.value.toUpperCase()">
                     </div>
                 </div>
             </div>
@@ -232,7 +232,7 @@
                                 <option value="other">Other…</option>
                             </select>
                             <div id="consumptionUnitOtherWrap" class="hidden mt-1">
-                                <input type="text" id="consumptionUnitOther" name="consumptionUnitOther" class="input-field" placeholder="Type the unit">
+                                <input type="text" id="consumptionUnitOther" name="consumptionUnitOther" class="input-field uppercase" placeholder="Type the unit" oninput="this.value = this.value.toUpperCase()">
                             </div>
                         </div>
                         <div>

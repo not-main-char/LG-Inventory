@@ -141,7 +141,7 @@ class IncomeController extends Controller
         ));
     }
     
-        public function store(Request $request)
+    public function store(Request $request)
     {
         $validated = $request->validate([
             'itemName' => 'required|string',
@@ -153,6 +153,11 @@ class IncomeController extends Controller
             'notes' => 'nullable|string'
         ]);
         
+        // Item names are labels, so keep them consistently uppercase.
+        // Notes are intentionally preserved as entered because they are
+        // sentence-style text and are easier to read in normal casing.
+        $validated['itemName'] = strtoupper(trim($validated['itemName']));
+
         $date = Carbon::parse($validated['date']);
         $season = $date->format('F Y'); 
         
@@ -180,7 +185,7 @@ class IncomeController extends Controller
 
         return redirect()->route('income.index')->with('success', 'Sale recorded');
     }
-    
+
     public function update(Request $request, $id)
     {
         $validated = $request->validate([
@@ -192,6 +197,10 @@ class IncomeController extends Controller
             'date' => 'required|date',
             'notes' => 'nullable|string'
         ]);
+
+        // Item names are labels, so keep them consistently uppercase.
+        // Notes remain in normal sentence case for readability.
+        $validated['itemName'] = strtoupper(trim($validated['itemName']));
 
         $docRef = $this->firestore->collection('sales')->document($id);
         $snapshot = $docRef->snapshot();
@@ -215,7 +224,6 @@ class IncomeController extends Controller
             'updatedAt' => Carbon::now('Asia/Manila'),
         ], ['merge' => true]);
 
-        // Wipe out the sales and dashboard caches so calculations reset immediately
         Cache::forget('income_list');
         Cache::forget('income_chart_data_' . date('Y'));
         Cache::forget('income_chart_data');
@@ -224,7 +232,7 @@ class IncomeController extends Controller
 
         return redirect()->route('income.index')->with('success', 'Sale updated');
     }
-
+    
     public function archive(string $id)
     {
         $this->firestore->collection('sales')->document($id)->set([

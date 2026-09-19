@@ -216,6 +216,38 @@ class InventoryController extends Controller
         return $itemData;
     }
 
+    /**
+     * Normalize free-text inventory fields while leaving select values and
+     * sentence-style notes/reasons untouched.
+     */
+    protected function normalizeInventoryInput(array $validated): array
+    {
+        foreach (['name', 'unitOther', 'consumptionUnitOther'] as $field) {
+            if (isset($validated[$field]) && is_string($validated[$field])) {
+                $validated[$field] = strtoupper(trim($validated[$field]));
+            }
+        }
+
+        if (($validated['unit'] ?? null) === 'other' && !empty($validated['unitOther'])) {
+            $validated['unit'] = $validated['unitOther'];
+        }
+
+        if (($validated['consumptionUnit'] ?? null) === 'other' && !empty($validated['consumptionUnitOther'])) {
+            $validated['consumptionUnit'] = $validated['consumptionUnitOther'];
+        }
+
+        // Sack weight is only relevant for sack-stocked items. Removing it
+        // for every other unit prevents an empty/stale hidden input from
+        // triggering the numeric validation rule.
+        if (($validated['unit'] ?? null) !== 'sack') {
+            unset($validated['sackWeightKg']);
+        } elseif (!isset($validated['sackWeightKg']) || $validated['sackWeightKg'] === '') {
+            $validated['sackWeightKg'] = self::DEFAULT_SACK_WEIGHT_KG;
+        }
+
+        return $validated;
+    }
+
     public function store(Request $request)
     {
         $validated = $request->validate([
@@ -227,13 +259,15 @@ class InventoryController extends Controller
             'usageFrequency' => 'required|in:daily,seasonal,manual',
             'dailyConsumptionAmount' => 'nullable|numeric|min:0',
             'consumptionUnit' => 'nullable|string|max:50',
+            'consumptionUnitOther' => 'nullable|string|max:50',
             'conversionRate' => 'nullable|numeric|min:0.01',
             'seedsPerCycle' => 'nullable|numeric|min:0',
             'daysToMaturity' => 'nullable|integer|min:0',
             'procurementSource' => 'required|in:DA,Farm Purchase',
-            'sackWeightKg' => 'nullable|numeric|min:1',
+            'sackWeightKg' => 'exclude_unless:unit,sack|nullable|numeric|min:1',
         ]);
 
+        $validated = $this->normalizeInventoryInput($validated);
         $itemData = $this->buildItemData($validated);
 
         // Check if item with same name already exists (avoid duplicates)
@@ -272,13 +306,15 @@ class InventoryController extends Controller
             'usageFrequency' => 'required|in:daily,seasonal,manual',
             'dailyConsumptionAmount' => 'nullable|numeric|min:0',
             'consumptionUnit' => 'nullable|string|max:50',
+            'consumptionUnitOther' => 'nullable|string|max:50',
             'conversionRate' => 'nullable|numeric|min:0.01',
             'seedsPerCycle' => 'nullable|numeric|min:0',
             'daysToMaturity' => 'nullable|integer|min:0',
             'procurementSource' => 'required|in:DA,Farm Purchase',
-            'sackWeightKg' => 'nullable|numeric|min:1',
+            'sackWeightKg' => 'exclude_unless:unit,sack|nullable|numeric|min:1',
         ]);
 
+        $validated = $this->normalizeInventoryInput($validated);
         $unit = $validated['unit'] ?? 'pcs';
         if ($unit === 'other' && !empty($validated['unitOther'])) {
             $unit = $validated['unitOther'];
