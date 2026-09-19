@@ -154,7 +154,6 @@ class ReportController extends Controller
                 (float) ($data['currentStock'] ?? 0), $data['usageFrequency'] ?? 'manual',
                 $restocked, $consumed,
                 $data['procurementSource'] ?? 'Not specified',
-                ($data['procurementSource'] ?? '') === 'Farm Purchase' ? (float) ($data['procurementCost'] ?? 0) : '',
                 $updatedAt?->format('Y-m-d H:i:s') ?? '',
             ];
         }
@@ -267,7 +266,7 @@ class ReportController extends Controller
     {
         $format = strtolower($format);
         $headers = str_contains(strtolower($title), 'inventory')
-            ? ['Item Name', 'Type', 'Stock Unit', 'Quantity in Stock', 'Stock Type', 'Monthly Restocked', 'Monthly Consumption', 'Procurement Source', 'Farm Cost', 'Last Stock Update']
+            ? ['Item Name', 'Type', 'Stock Unit', 'Quantity in Stock', 'Stock Type', 'Monthly Restocked', 'Monthly Consumption', 'Procurement Source', 'Last Stock Update']
             : ['Item Name', 'Type', 'Quantity Sold', 'Unit Sold', 'Income (PHP)', 'Date of Sale', 'Notes'];
         abort_unless(in_array($format, ['xlsx', 'pdf'], true), 404);
 

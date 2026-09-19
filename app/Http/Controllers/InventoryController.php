@@ -90,15 +90,35 @@ class InventoryController extends Controller
 {
     protected $firestore;
 
-    protected const KNOWN_CONVERSIONS = [
-        'fish feed' => ['unit' => 'sack', 'consumptionUnit' => 'cup', 'conversionRate' => 125],
-        'feed' => ['unit' => 'sack', 'consumptionUnit' => 'cup', 'conversionRate' => 125],
-        'vitamins' => ['unit' => 'sack', 'consumptionUnit' => 'cup', 'conversionRate' => 125],
-    ];
+    // Every farm input that's stocked in sacks and used a little at a time.
+    // The system automatically offers kg and cup as deduction choices for these,
+    // computed from the constants below — the CAC Manager never has to configure
+    // or calculate a conversion themselves.
+    protected const SACK_ITEM_KEYWORDS = ['fish feed', 'feed', 'vitamins'];
+
+    // 1 kg of floating fish feed pellets ≈ 8 standard (240 mL) cups, based on the
+    // typical bulk density of floating pellets (0.45-0.55 kg/L). This is a computed
+    // estimate; the farm can recalibrate it by weighing one actual cup of their feed.
+    protected const CUPS_PER_KG = 8;
+
+    // Standard commercial fish feed sack size sold in the Philippines (e.g. B-MEG,
+    // Vitarich). Used only as a fallback when an item doesn't specify its own sack
+    // weight (see 'sackWeightKg' on the item itself, which takes priority).
+    protected const DEFAULT_SACK_WEIGHT_KG = 25;
 
     public function __construct(Firestore $firestore)
     {
         $this->firestore = $firestore->database();
+    }
+
+    /**
+     * The sack weight (in kg) to use for a given item: the item's own saved
+     * value if the admin set one, otherwise the standard 25kg default.
+     */
+    protected function resolveSackWeightKg($item)
+    {
+        $weight = (float)($item['sackWeightKg'] ?? 0);
+        return $weight > 0 ? $weight : self::DEFAULT_SACK_WEIGHT_KG;
     }
 
     public function index(Request $request)
@@ -150,15 +170,30 @@ class InventoryController extends Controller
             'unit' => $unit,
             'usageFrequency' => $validated['usageFrequency'] ?? 'manual',
             'procurementSource' => $validated['procurementSource'],
-            'procurementCost' => $validated['procurementSource'] === 'Farm Purchase' ? (float) ($validated['procurementCost'] ?? 0) : null,
             'createdAt' => Carbon::now('Asia/Manila'),
         ];
+
+        // Sack weight: how many kg are in one sack of this item (25kg, 50kg, or a
+        // custom size). Only relevant for sack-stocked items; used to correctly
+        // scale the kg/cup deduction conversions to the sack's actual size.
+        if ($unit === 'sack') {
+            $itemData['sackWeightKg'] = (float)($validated['sackWeightKg'] ?? self::DEFAULT_SACK_WEIGHT_KG);
+        }
 
         // Daily consumption fields
         if ($validated['usageFrequency'] === 'daily') {
             $itemData['dailyConsumptionAmount'] = (float)($validated['dailyConsumptionAmount'] ?? 0);
             $itemData['consumptionUnit'] = $validated['consumptionUnit'] ?? 'cup';
-            $itemData['conversionRate'] = (float)($validated['conversionRate'] ?? 125);
+
+            if (!empty($validated['conversionRate'])) {
+                // Admin explicitly set their own conversion rate
+                $itemData['conversionRate'] = (float)$validated['conversionRate'];
+            } elseif ($unit === 'sack' && $itemData['consumptionUnit'] === 'cup') {
+                // Compute from the verified cups-per-kg figure and this item's sack weight
+                $itemData['conversionRate'] = $itemData['sackWeightKg'] * self::CUPS_PER_KG;
+            } else {
+                $itemData['conversionRate'] = null;
+            }
         }
 
         // Seasonal consumption fields
@@ -196,7 +231,7 @@ class InventoryController extends Controller
             'seedsPerCycle' => 'nullable|numeric|min:0',
             'daysToMaturity' => 'nullable|integer|min:0',
             'procurementSource' => 'required|in:DA,Farm Purchase',
-            'procurementCost' => 'nullable|numeric|min:0',
+            'sackWeightKg' => 'nullable|numeric|min:1',
         ]);
 
         $itemData = $this->buildItemData($validated);
@@ -241,7 +276,7 @@ class InventoryController extends Controller
             'seedsPerCycle' => 'nullable|numeric|min:0',
             'daysToMaturity' => 'nullable|integer|min:0',
             'procurementSource' => 'required|in:DA,Farm Purchase',
-            'procurementCost' => 'nullable|numeric|min:0',
+            'sackWeightKg' => 'nullable|numeric|min:1',
         ]);
 
         $unit = $validated['unit'] ?? 'pcs';
@@ -264,14 +299,28 @@ class InventoryController extends Controller
             'unit' => $unit,
             'usageFrequency' => $validated['usageFrequency'],
             'procurementSource' => $validated['procurementSource'],
-            'procurementCost' => $validated['procurementSource'] === 'Farm Purchase' ? (float) ($validated['procurementCost'] ?? 0) : null,
         ];
+
+        // Sack weight: how many kg are in one sack of this item. Only relevant
+        // for sack-stocked items; used to correctly scale the kg/cup deduction
+        // conversions to the sack's actual size (25kg, 50kg, or custom).
+        if ($unit === 'sack') {
+            $updateData['sackWeightKg'] = (float)($validated['sackWeightKg'] ?? self::DEFAULT_SACK_WEIGHT_KG);
+        }
 
         // Update consumption fields based on frequency
         if ($validated['usageFrequency'] === 'daily') {
             $updateData['dailyConsumptionAmount'] = (float)($validated['dailyConsumptionAmount'] ?? 0);
             $updateData['consumptionUnit'] = $validated['consumptionUnit'] ?? 'cup';
-            $updateData['conversionRate'] = (float)($validated['conversionRate'] ?? 125);
+
+            if (!empty($validated['conversionRate'])) {
+                $updateData['conversionRate'] = (float)$validated['conversionRate'];
+            } elseif ($unit === 'sack' && $updateData['consumptionUnit'] === 'cup') {
+                $sackWeightKg = $updateData['sackWeightKg'] ?? self::DEFAULT_SACK_WEIGHT_KG;
+                $updateData['conversionRate'] = $sackWeightKg * self::CUPS_PER_KG;
+            } else {
+                $updateData['conversionRate'] = null;
+            }
         }
 
         if ($validated['usageFrequency'] === 'seasonal') {
@@ -526,7 +575,6 @@ class InventoryController extends Controller
             'itemId' => 'required|string',
             'quantity' => 'required|numeric|min:0.01',
             'deductUnit' => 'required|string',
-            'deductUnitOther' => 'nullable|string|max:100',
             'reason' => 'required|string',
         ]);
 
@@ -541,41 +589,34 @@ class InventoryController extends Controller
             $item = $itemDoc->data();
             $deductAmount = (float)$validated['quantity'];
             $itemUnit = $item['unit'] ?? 'pcs';
-            $deductUnit = $validated['deductUnit'] === 'other' ? $validated['deductUnitOther'] : $validated['deductUnit'];
+            $deductUnit = $validated['deductUnit'];
 
-            // Perform conversion if deduction unit is different from item's base unit
+            // Perform conversion if deduction unit is different from item's base unit.
+            // The CAC Manager can deduct in whichever unit they actually have on hand
+            // (a cup, a weighing scale, etc.) — they never need to know or calculate
+            // the conversion themselves. Resolution order:
+            //   1. A conversion rate the admin explicitly saved for this exact item
+            //   2. For sack items, a rate computed from the item's own sack weight
+            //      (25kg/50kg/custom, set when the item was added) times the
+            //      farm's verified cups-per-kg figure — so a 50kg sack correctly
+            //      converts to twice as many cups as a 25kg sack of the same feed
             if ($itemUnit !== $deductUnit) {
-                $conversionRate = 1;
-                // Check for known conversions
-                $itemNameLower = strtolower($item['name']);
-                foreach (self::KNOWN_CONVERSIONS as $keyword => $conversion) {
-                    if (str_contains($itemNameLower, $keyword) && $conversion['unit'] === $itemUnit && $conversion['consumptionUnit'] === $deductUnit) {
-                        $conversionRate = $conversion['conversionRate'];
-                        break;
-                    }
-                }
-                
-                // Priority 1: Use the Admin-defined conversion rate saved for this specific item
+                $conversionRate = null;
+
                 if (isset($item['conversionRate']) && (float)$item['conversionRate'] > 0 && ($item['consumptionUnit'] ?? '') === $deductUnit) {
                     $conversionRate = (float)$item['conversionRate'];
-                } 
-                // Priority 2: Use the Global Known Conversions (fallback)
-                else {
-                    $itemNameLower = strtolower($item['name']);
-                    foreach (self::KNOWN_CONVERSIONS as $keyword => $conversion) {
-                        if (str_contains($itemNameLower, $keyword) && $conversion['unit'] === $itemUnit && $conversion['consumptionUnit'] === $deductUnit) {
-                            $conversionRate = $conversion['conversionRate'];
-                            break;
-                        }
-                    }
-                }
-                
-                // Priority 3: Generic fallback for Sacks to Kilos if nothing else is defined
-                if ($conversionRate === 1 && $itemUnit === 'sack' && $deductUnit === 'kg') {
-                    $conversionRate = 25;
                 }
 
-                if ($conversionRate > 0) {
+                if ($conversionRate === null && $itemUnit === 'sack') {
+                    $sackWeightKg = $this->resolveSackWeightKg($item);
+                    if ($deductUnit === 'kg') {
+                        $conversionRate = $sackWeightKg;
+                    } elseif ($deductUnit === 'cup') {
+                        $conversionRate = $sackWeightKg * self::CUPS_PER_KG;
+                    }
+                }
+
+                if ($conversionRate !== null && $conversionRate > 0) {
                     $deductAmount = $deductAmount / $conversionRate;
                 } else {
                     //if no conversion rate, prevent deduction with different units
@@ -670,9 +711,17 @@ class InventoryController extends Controller
     public function knownConversion(Request $request)
     {
         $name = strtolower(trim($request->query('name', '')));
-        foreach (self::KNOWN_CONVERSIONS as $keyword => $conversion) {
+        foreach (self::SACK_ITEM_KEYWORDS as $keyword) {
             if ($name !== '' && str_contains($name, $keyword)) {
-                return response()->json($conversion);
+                // The frontend uses cupsPerKg and defaultSackWeightKg to compute a
+                // live estimate (e.g. "25kg sack ≈ 200 cups"), and lets the admin
+                // change the sack weight if theirs is different (e.g. 50kg).
+                return response()->json([
+                    'unit' => 'sack',
+                    'consumptionUnit' => 'cup',
+                    'cupsPerKg' => self::CUPS_PER_KG,
+                    'defaultSackWeightKg' => self::DEFAULT_SACK_WEIGHT_KG,
+                ]);
             }
         }
         return response()->json(null);

@@ -43,11 +43,16 @@ Route::middleware(['auth.firebase'])->group(function () {
         Route::post('/inventory/restock', [InventoryController::class, 'restock'])->name('inventory.restock');
     });
     
-    Route::get('/income/archived', [IncomeController::class, 'archived'])->name('income.archived');
-    Route::post('/income/{id}/archive', [IncomeController::class, 'archive'])->name('income.archive');
-    Route::post('/income/{id}/restore', [IncomeController::class, 'restore']) ->name('income.restore');
-    Route::resource('income', IncomeController::class)->except(['destroy']);
+    Route::get('/income', [IncomeController::class, 'index'])->name('income.index');
     Route::get('/income-chart-data', [IncomeController::class, 'chartData']);
+
+    Route::middleware(['role:admin'])->group(function () {
+        Route::post('/income', [IncomeController::class, 'store'])->name('income.store');
+        Route::put('/income/{income}', [IncomeController::class, 'update'])->name('income.update');
+        Route::post('/income/{id}/archive', [IncomeController::class, 'archive'])->name('income.archive');
+        Route::post('/income/{id}/restore', [IncomeController::class, 'restore']) ->name('income.restore');
+        Route::get('/income/archived', [IncomeController::class, 'archived'])->name('income.archived');
+    });
     
     Route::middleware(['role:admin'])->group(function () {
         Route::get('/archives', [InventoryController::class, 'unifiedArchives'])->name('archives.index');

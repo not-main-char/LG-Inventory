@@ -181,6 +181,50 @@ class IncomeController extends Controller
         return redirect()->route('income.index')->with('success', 'Sale recorded');
     }
     
+    public function update(Request $request, $id)
+    {
+        $validated = $request->validate([
+            'itemName' => 'required|string',
+            'type' => 'required|in:fish,plant',
+            'quantitySold' => 'required|numeric|min:0.01',
+            'unit' => 'required|in:kilos,pcs',
+            'saleAmount' => 'required|numeric|min:0.01',
+            'date' => 'required|date',
+            'notes' => 'nullable|string'
+        ]);
+
+        $docRef = $this->firestore->collection('sales')->document($id);
+        $snapshot = $docRef->snapshot();
+        if (!$snapshot->exists()) {
+            return back()->withErrors(['error' => 'Sale record not found']);
+        }
+
+        $date = Carbon::parse($validated['date']);
+        $season = $date->format('F Y');
+
+        $docRef->set([
+            'itemName' => $validated['itemName'],
+            'type' => $validated['type'],
+            'quantitySold' => $validated['quantitySold'],
+            'unit' => $validated['unit'],
+            'saleAmount' => $validated['saleAmount'],
+            'date' => $date,
+            'season' => $season,
+            'notes' => $validated['notes'] ?? '',
+            'updatedBy' => request()->attributes->get('firebase_user'),
+            'updatedAt' => Carbon::now('Asia/Manila'),
+        ], ['merge' => true]);
+
+        // Wipe out the sales and dashboard caches so calculations reset immediately
+        Cache::forget('income_list');
+        Cache::forget('income_chart_data_' . date('Y'));
+        Cache::forget('income_chart_data');
+        Cache::forget('dashboard_stats');
+        Cache::forget('sales_chart_data');
+
+        return redirect()->route('income.index')->with('success', 'Sale updated');
+    }
+
     public function archive(string $id)
     {
         $this->firestore->collection('sales')->document($id)->set([

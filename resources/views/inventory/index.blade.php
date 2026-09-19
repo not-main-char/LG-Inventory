@@ -85,9 +85,6 @@
                 </td>
                 <td class="p-3 align-middle text-sm text-gray-600">
                     <div>{{ $data['procurementSource'] ?? 'Not specified' }}</div>
-                    @if(($data['procurementSource'] ?? '') === 'Farm Purchase')
-                        <div class="text-[11px] text-gray-400">Cost: {{ number_format((float) ($data['procurementCost'] ?? 0), 2) }}</div>
-                    @endif
                 </td>
                 <td class="p-3 align-middle text-sm text-gray-600">
                     {{ isset($data['lastStockUpdate']) ? $data['lastStockUpdate']->toDateTime()->format('M d, Y') : 'N/A' }}
@@ -165,14 +162,22 @@
             <div class="grid grid-cols-2 gap-3">
                 <div>
                     <label class="block text-xs font-semibold text-gray-600 mb-1">Procurement Source</label>
-                    <select id="procurementSource" name="procurementSource" class="input-field" onchange="toggleProcurementCost()" required>
+                    <select id="procurementSource" name="procurementSource" class="input-field" required>
                         <option value="DA">Department of Agriculture (DA)</option>
                         <option value="Farm Purchase">Bought from the Farm</option>
                     </select>
                 </div>
-                <div id="procurementCostWrap" class="hidden">
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Farm Cost</label>
-                    <input type="number" id="procurementCost" name="procurementCost" step="0.01" min="0" class="input-field" placeholder="e.g. 2500.00">
+                <div id="sackWeightWrap" class="hidden">
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Sack Weight</label>
+                    <select id="sackWeightPreset" class="input-field" onchange="onSackWeightPresetChange()">
+                        <option value="25">25 kg (standard)</option>
+                        <option value="50">50 kg</option>
+                        <option value="custom">Custom…</option>
+                    </select>
+                    <div id="sackWeightCustomWrap" class="hidden mt-1.5">
+                        <input type="number" id="sackWeightCustomInput" step="any" min="1" class="input-field" placeholder="e.g. 20" oninput="syncSackWeightHidden()">
+                    </div>
+                    <input type="hidden" id="sackWeightKg" name="sackWeightKg" value="25">
                 </div>
             </div>
             <div class="grid grid-cols-2 gap-3">
@@ -182,7 +187,7 @@
                 </div>
                 <div>
                     <label class="block text-xs font-semibold text-gray-600 mb-1">Stock Unit</label>
-                    <select id="unitSelect" name="unit" class="input-field" onchange="document.getElementById('unitOtherWrap').classList.toggle('hidden', this.value !== 'other')">
+                    <select id="unitSelect" name="unit" class="input-field" onchange="toggleUnitDependentFields()">
                         <option value="pcs">Pieces</option>
                         <option value="sack">Sack</option>
                         <option value="seeds">Seed</option>
@@ -212,7 +217,7 @@
                 </div>
 
                 <p id="fishFeedAssumedNote" class="text-[11px] text-gray-500">
-                    Assuming this is fish feed — 1 sack ≈ 125 cups, so "Daily Amount" above is in cups.
+                    Assuming this is fish feed — a 25kg sack ≈ 200 cups (1 kg ≈ 8 cups), so "Daily Amount" above is in cups.
                     <button type="button" onclick="showManualConsumptionFields()" class="underline font-medium" style="color:var(--color-water-600)">Set the units manually</button>
                 </p>
 
@@ -232,7 +237,7 @@
                         </div>
                         <div>
                             <label class="block text-xs text-gray-600 mb-1">Conversion Rate</label>
-                            <input type="number" id="conversionRate" name="conversionRate" step="any" class="input-field" placeholder="e.g. 125">
+                            <input type="number" id="conversionRate" name="conversionRate" step="any" class="input-field" placeholder="e.g. 200" oninput="this.dataset.manuallyEdited = 'true'">
                         </div>
                     </div>
                 </div>
@@ -280,11 +285,6 @@
                         <!-- Options will be populated dynamically via JavaScript -->
                     </select>
                 </div>
-            </div>
-
-            <div id="deductUnitOtherWrap" class="hidden">
-                <label class="block text-xs font-semibold text-gray-600 mb-1">Custom Unit</label>
-                <input type="text" name="deductUnitOther" class="input-field" placeholder="e.g., Handful, Bunch">
             </div>
 
             <div>
@@ -353,14 +353,52 @@
 
 @push('scripts')
 <script>
-    function toggleProcurementCost() {
-        const source = document.getElementById('procurementSource');
-        const costWrap = document.getElementById('procurementCostWrap');
-        const cost = document.getElementById('procurementCost');
-        const isFarmPurchase = source && source.value === 'Farm Purchase';
-        costWrap.classList.toggle('hidden', !isFarmPurchase);
-        cost.required = isFarmPurchase;
-        if (!isFarmPurchase) cost.value = '';
+    // Farm-verified: 1 kg of fish feed pellets ≈ 8 standard (240 mL) cups,
+    // kept in sync with InventoryController::CUPS_PER_KG.
+    const CUPS_PER_KG = 8;
+
+    function toggleUnitDependentFields() {
+        const unit = document.getElementById('unitSelect').value;
+        document.getElementById('unitOtherWrap').classList.toggle('hidden', unit !== 'other');
+        document.getElementById('sackWeightWrap').classList.toggle('hidden', unit !== 'sack');
+        updateFishFeedAssumedNote();
+    }
+
+    function onSackWeightPresetChange() {
+        const preset = document.getElementById('sackWeightPreset').value;
+        const customWrap = document.getElementById('sackWeightCustomWrap');
+        const hidden = document.getElementById('sackWeightKg');
+        if (preset === 'custom') {
+            customWrap.classList.remove('hidden');
+            syncSackWeightHidden();
+        } else {
+            customWrap.classList.add('hidden');
+            hidden.value = preset;
+            updateFishFeedAssumedNote();
+        }
+    }
+
+    function syncSackWeightHidden() {
+        const customVal = document.getElementById('sackWeightCustomInput').value;
+        document.getElementById('sackWeightKg').value = customVal || '';
+        updateFishFeedAssumedNote();
+    }
+
+    // Recomputes the assumed-cups note and the hidden Conversion Rate field
+    // whenever the sack weight changes, so a 50kg sack correctly shows/saves
+    // double the cups of a 25kg sack of the same feed — never a fixed number.
+    function updateFishFeedAssumedNote() {
+        const sackWeight = parseFloat(document.getElementById('sackWeightKg').value) || 25;
+        const cups = sackWeight * CUPS_PER_KG;
+        const note = document.getElementById('fishFeedAssumedNote');
+        if (note) {
+            note.innerHTML = `Assuming this is fish feed — a ${sackWeight}kg sack ≈ ${cups} cups (1 kg ≈ ${CUPS_PER_KG} cups), so "Daily Amount" above is in cups. ` +
+                `<button type="button" onclick="showManualConsumptionFields()" class="underline font-medium" style="color:var(--color-water-600)">Set the units manually</button>`;
+        }
+        const conversionRateInput = document.getElementById('conversionRate');
+        if (conversionRateInput && !conversionRateInput.dataset.manuallyEdited) {
+            conversionRateInput.value = cups;
+        }
     }
 
     function toggleFrequencyFields() {
@@ -375,20 +413,27 @@
     function showManualConsumptionFields() {
         document.getElementById('manualConsumptionFields').classList.remove('hidden');
         document.getElementById('fishFeedAssumedNote').classList.add('hidden');
+        document.getElementById('conversionRate').dataset.manuallyEdited = 'true';
     }
 
     async function suggestKnownConversion() {
         const name = document.getElementById('itemName').value;
         if (!name || name.length < 3) return;
-        
+
         try {
             const res = await fetch(`/inventory/known-conversion?name=${encodeURIComponent(name)}`);
             const known = await res.json();
             if (known) {
+                // Prefill the sack weight with the standard default (admin can still change it)
+                document.getElementById('sackWeightPreset').value = String(known.defaultSackWeightKg);
+                document.getElementById('sackWeightCustomWrap').classList.add('hidden');
+                document.getElementById('sackWeightKg').value = known.defaultSackWeightKg;
+
                 setSelectValue('consumptionUnit', 'consumptionUnitOtherWrap', 'consumptionUnitOther', known.consumptionUnit, ['cup','kg','pcs']);
-                document.getElementById('conversionRate').value = known.conversionRate;
+                document.getElementById('conversionRate').removeAttribute('data-manually-edited');
                 document.getElementById('manualConsumptionFields').classList.add('hidden');
                 document.getElementById('fishFeedAssumedNote').classList.remove('hidden');
+                updateFishFeedAssumedNote();
             } else {
                 showManualConsumptionFields();
             }
@@ -407,7 +452,7 @@
         const methodInput = document.querySelector('#itemForm input[name="_method"]');
         if (methodInput) methodInput.remove();
         toggleFrequencyFields();
-        toggleProcurementCost();
+        toggleUnitDependentFields();
         modal.classList.remove('hidden');
         modal.classList.add('flex');
     }
@@ -442,18 +487,37 @@
         document.getElementById('usageFrequency').value = item.usageFrequency || 'manual';
         setSelectValue('unitSelect', 'unitOtherWrap', 'unitOther', item.unit, ['pcs','sack','seeds']);
         document.getElementById('procurementSource').value = item.procurementSource || 'DA';
-        document.getElementById('procurementCost').value = item.procurementCost ?? '';
-        toggleProcurementCost();
+
+        if (item.unit === 'sack') {
+            const weight = parseFloat(item.sackWeightKg) || 25;
+            if (weight === 25 || weight === 50) {
+                document.getElementById('sackWeightPreset').value = String(weight);
+                document.getElementById('sackWeightCustomWrap').classList.add('hidden');
+            } else {
+                document.getElementById('sackWeightPreset').value = 'custom';
+                document.getElementById('sackWeightCustomWrap').classList.remove('hidden');
+                document.getElementById('sackWeightCustomInput').value = weight;
+            }
+            document.getElementById('sackWeightKg').value = weight;
+        }
+        toggleUnitDependentFields();
 
         if (item.usageFrequency === 'daily') {
             document.getElementById('dailyConsumptionAmount').value = item.dailyConsumptionAmount ?? '';
             document.getElementById('conversionRate').value = item.conversionRate ?? '';
             setSelectValue('consumptionUnit', 'consumptionUnitOtherWrap', 'consumptionUnitOther', item.consumptionUnit, ['cup','kg','pcs']);
-            if (item.consumptionUnit !== 'cup' || Number(item.conversionRate) !== 125) {
+
+            // The "assumed" note only applies to sack items using the system's
+            // computed cups-per-kg figure — compare against that, not a fixed number,
+            // so a correctly-computed 50kg-sack rate isn't mistaken for a manual edit.
+            const assumedRate = (item.unit === 'sack') ? (parseFloat(item.sackWeightKg) || 25) * CUPS_PER_KG : null;
+            if (item.consumptionUnit !== 'cup' || assumedRate === null || Number(item.conversionRate) !== assumedRate) {
                 showManualConsumptionFields();
             } else {
                 document.getElementById('manualConsumptionFields').classList.add('hidden');
                 document.getElementById('fishFeedAssumedNote').classList.remove('hidden');
+                document.getElementById('conversionRate').removeAttribute('data-manually-edited');
+                updateFishFeedAssumedNote();
             }
         }
         if (item.usageFrequency === 'seasonal') {
@@ -513,11 +577,10 @@
         const itemUnit = option.getAttribute('data-unit') || 'pcs';
         const consumptionUnit = option.getAttribute('data-consumption-unit') || '';
         const deductUnitSelect = document.getElementById('deductUnitSelect');
-        const otherWrap = document.getElementById('deductUnitOtherWrap');
-        
+
         // Clear current options
         deductUnitSelect.innerHTML = '<option value="">-- Select --</option>';
-        
+
         // Always allow the Base Unit
         deductUnitSelect.innerHTML += `<option value="${itemUnit}">${itemUnit}</option>`;
 
@@ -526,17 +589,21 @@
             deductUnitSelect.innerHTML += `<option value="${consumptionUnit}">${consumptionUnit}</option>`;
         }
 
-        // Special fallback for Sack items if no consumption unit is set
-        if (itemUnit === 'sack' && !consumptionUnit) {
-            deductUnitSelect.innerHTML += `
-                <option value="kg">Kilogram (Kg)</option>
-                <option value="cup">Cup</option>
-            `;
+        // Sack items always get BOTH Kilogram and Cup as options, regardless of which
+        // single unit was chosen back when the item was first added. This way the CAC
+        // Manager can deduct with whichever measure they actually have on hand that
+        // day (a weighing scale or a cup) without needing to set anything up first.
+        if (itemUnit === 'sack') {
+            if (consumptionUnit !== 'kg') {
+                deductUnitSelect.innerHTML += `<option value="kg">Kilogram (Kg)</option>`;
+            }
+            if (consumptionUnit !== 'cup') {
+                deductUnitSelect.innerHTML += `<option value="cup">Cup</option>`;
+            }
         }
 
         // Default to the base unit
         deductUnitSelect.value = itemUnit;
-        otherWrap.classList.add('hidden');
     }
 
     function updateRestockUnitDisplay() {
@@ -581,14 +648,5 @@
             document.getElementById('historyList').innerHTML = '<p class="text-sm text-rust-600 py-6 text-center">Could not load history.</p>';
         }
     }
-    // When user changes the "Deduction Unit" dropdown, show/hide the "Custom Unit" field
-    document.getElementById('deductUnitSelect').addEventListener('change', function() {
-        const otherWrap = document.getElementById('deductUnitOtherWrap');
-        if (this.value === 'other') {
-            otherWrap.classList.remove('hidden');
-        } else {
-            otherWrap.classList.add('hidden'); 
-        }
-    });
 </script>
 @endpush

@@ -115,10 +115,13 @@
                 <td class="p-3 align-middle text-sm text-gray-500">{{ $data['notes'] ?? '—' }}</td>
                 <td class="p-3 align-middle">
                     @if($role === 'admin')
-                        <form method="POST" action="{{ route('income.archive', $sale->id()) }}" onsubmit="return confirm('Archive this sale record?')">
-                            @csrf
-                            <button type="submit" class="text-sm font-medium hover:underline" style="color:var(--color-rust-600)">Archive</button>
-                        </form>
+                        <div class="flex items-center gap-3 text-sm">
+                            <button onclick='editSale(@json(array_merge(["id" => $sale->id()], $data, ["date" => \Carbon\Carbon::parse($data["date"])->format("Y-m-d")])))' class="font-medium hover:underline" style="color:var(--color-forest-700)">Edit</button>
+                            <form method="POST" action="{{ route('income.archive', $sale->id()) }}" onsubmit="return confirm('Archive this sale record?')" class="inline">
+                                @csrf
+                                <button type="submit" class="font-medium hover:underline" style="color:var(--color-rust-600)">Archive</button>
+                            </form>
+                        </div>
                     @else
                         <span class="text-gray-400 italic text-xs">View only</span>
                     @endif
@@ -135,28 +138,29 @@
 
 <div id="saleModal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50 p-4">
     <div class="modal-panel p-6 w-full max-w-md">
-        <h2 class="font-display text-xl font-semibold mb-4" style="color:var(--color-ink-900)">Record Sale</h2>
-        <form method="POST" action="{{ route('income.store') }}" class="space-y-3">
+        <h2 class="font-display text-xl font-semibold mb-4" id="saleModalTitle" style="color:var(--color-ink-900)">Record Sale</h2>
+        <form id="saleForm" method="POST" action="{{ route('income.store') }}" class="space-y-3">
             @csrf
+            <input type="hidden" id="saleId" name="id">
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Item Name (crop or fish)</label>
-                <input type="text" name="itemName" class="input-field" required>
+                <input type="text" id="saleItemName" name="itemName" class="input-field" required>
             </div>
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Type</label>
-                <select name="type" class="input-field">
+                <select id="saleType" name="type" class="input-field">
                     <option value="fish">Fish</option>
                     <option value="plant">Plant</option>
                 </select>
             </div>
-                        <div class="grid grid-cols-2 gap-3">
+                <div class="grid grid-cols-2 gap-3">
                 <div>
                     <label class="block text-xs font-semibold text-gray-600 mb-1">Quantity Sold</label>
-                    <input type="number" step="any" name="quantitySold" class="input-field" required>
+                    <input type="number" step="any" id="saleQuantity" name="quantitySold" class="input-field" required>
                 </div>
                 <div>
                     <label class="block text-xs font-semibold text-gray-600 mb-1">Unit</label>
-                    <select name="unit" class="input-field" required>
+                    <select id="saleUnit" name="unit" class="input-field" required>
                         <option value="">-- Select Unit --</option>
                         <option value="kilos">Kilos</option>
                         <option value="pcs">Pcs</option>
@@ -165,16 +169,16 @@
             </div>
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Sale Amount (₱)</label>
-                <input type="number" step="any" name="saleAmount" class="input-field" required>
+                <input type="number" step="any" id="saleAmount" name="saleAmount" class="input-field" required>
             </div>
 
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Date</label>
-                <input type="date" name="date" class="input-field" required>
+                <input type="date" id="saleDate" name="date" class="input-field" required>
             </div>
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Notes</label>
-                <textarea name="notes" class="input-field" rows="2"></textarea>
+                <textarea id="saleNotes" name="notes" class="input-field" rows="2"></textarea>
             </div>
             <div class="pt-2 flex gap-2">
                 <button type="submit" class="btn-primary w-full py-2.5 text-sm">Save Sale</button>
@@ -188,9 +192,42 @@
 @push('scripts')
 <script>
     function openSaleModal() {
+        document.getElementById('saleModalTitle').innerText = 'Record Sale';
+        document.getElementById('saleForm').reset();
+        document.getElementById('saleId').value = '';
+        document.getElementById('saleForm').action = '{{ route('income.store') }}';
+        const methodInput = document.querySelector('#saleForm input[name="_method"]');
+        if (methodInput) methodInput.remove();
+
         const m = document.getElementById('saleModal');
         m.classList.remove('hidden'); m.classList.add('flex');
     }
+
+    function editSale(sale) {
+        document.getElementById('saleModalTitle').innerText = 'Edit Sale';
+        document.getElementById('saleId').value = sale.id;
+        document.getElementById('saleItemName').value = sale.itemName;
+        document.getElementById('saleType').value = sale.type;
+        document.getElementById('saleQuantity').value = sale.quantitySold;
+        document.getElementById('saleUnit').value = sale.unit;
+        document.getElementById('saleAmount').value = sale.saleAmount;
+        document.getElementById('saleDate').value = sale.date;
+        document.getElementById('saleNotes').value = sale.notes || '';
+
+        document.getElementById('saleForm').action = `/income/${sale.id}`;
+        let methodInput = document.querySelector('#saleForm input[name="_method"]');
+        if (!methodInput) {
+            methodInput = document.createElement('input');
+            methodInput.type = 'hidden';
+            methodInput.name = '_method';
+            document.getElementById('saleForm').appendChild(methodInput);
+        }
+        methodInput.value = 'PUT';
+
+        const m = document.getElementById('saleModal');
+        m.classList.remove('hidden'); m.classList.add('flex');
+    }
+
     function closeSaleModal() {
         const m = document.getElementById('saleModal');
         m.classList.add('hidden'); m.classList.remove('flex');
