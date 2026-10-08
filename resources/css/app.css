@@ -112,6 +112,7 @@
 }
 .stamp-fish { color: var(--color-water-600); background: var(--color-water-100); }
 .stamp-plant { color: var(--color-soil-600); background: var(--color-soil-100); }
+.stamp-seed { color: var(--color-soil-600); background: var(--color-soil-100); }
 .stamp-supplies { color: var(--color-forest-700); background: var(--color-moss-100); }
 
 /* ---- Stat / ledger cards ---- */

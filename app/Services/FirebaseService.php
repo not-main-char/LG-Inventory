@@ -22,6 +22,11 @@ class FirebaseService
         return $this->factory->createFirestore()->database();
     }
 
+    public function getDatabase()
+    {
+        return $this->factory->createDatabase();
+    }
+
     public function getAuth()
     {
         return $this->factory->createAuth();

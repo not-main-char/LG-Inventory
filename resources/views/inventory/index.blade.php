@@ -68,7 +68,7 @@
                 $isLow = \App\Support\InventoryAlerts::isLow($data);
                 $daysLeft = \App\Support\InventoryAlerts::daysRemaining($data);
                 $cyclesLeft = \App\Support\InventoryAlerts::cyclesRemaining($data);
-                $stampClass = $data['type'] === 'fish' ? 'stamp-fish' : ($data['type'] === 'plant' ? 'stamp-plant' : 'stamp-supplies');
+                $stampClass = $data['type'] === 'fish' ? 'stamp-fish' : ($data['type'] === 'seed' ? 'stamp-seed' : 'stamp-supplies');
             @endphp
             <tr class="border-b border-[#F1ECDC] {{ $isLow ? 'low-stock-row' : '' }}">
                 <td class="p-3 align-middle">
@@ -155,7 +155,7 @@
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Category</label>
                 <select id="itemType" name="type" class="input-field">
                     <option value="fish">Fish</option>
-                    <option value="plant">Plant / Seed</option>
+                    <option value="seed">Seed</option>
                     <option value="supplies">Supplies</option>
                 </select>
             </div>
@@ -182,7 +182,7 @@
             </div>
             <div class="grid grid-cols-2 gap-3">
                 <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Current Stock</label>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Quantity</label>
                     <input type="number" id="currentStock" name="currentStock" step="any" class="input-field" required>
                 </div>
                 <div>
@@ -289,15 +289,17 @@
 
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Reason</label>
-                <select name="reason" class="input-field" required>
+                <select id="deductReasonSelect" name="reason" class="input-field" required onchange="toggleCustomDeductionReason()">
                     <option value="">-- Select Reason --</option>
-                    <option value="Used at home">Used at home</option>
+                    <option value="Used in the farm">Used in the farm</option>
                     <option value="Spoilage/Waste">Spoilage/Waste</option>
                     <option value="Testing/Sample">Testing/Sample</option>
                     <option value="Damaged">Damaged</option>
-                    <option value="Lost/Theft">Lost/Theft</option>
                     <option value="Other">Other</option>
                 </select>
+                <div id="customDeductionReasonWrap" class="hidden mt-1.5">
+                    <input type="text" id="customDeductionReason" name="customReason" class="input-field uppercase" placeholder="Type the specific reason" maxlength="255" oninput="this.value = this.value.toUpperCase()">
+                </div>
             </div>
 
             <div class="pt-2 flex gap-2">
@@ -611,6 +613,18 @@
         const option = select.options[select.selectedIndex];
         const unit = option.getAttribute('data-unit') || 'units';
         document.getElementById('restockUnitDisplay').innerText = `Adding to: ${unit}`;
+    }
+
+    function toggleCustomDeductionReason() {
+        const reasonSelect = document.getElementById('deductReasonSelect');
+        const customWrap = document.getElementById('customDeductionReasonWrap');
+        const customInput = document.getElementById('customDeductionReason');
+        const isOther = reasonSelect.value === 'Other';
+
+        customWrap.classList.toggle('hidden', !isOther);
+        customInput.required = isOther;
+
+        if (!isOther) customInput.value = '';
     }
 
     async function deleteItem(id) {

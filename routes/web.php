@@ -7,6 +7,7 @@ use App\Http\Controllers\IncomeController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\ReportController;
+use App\Http\Controllers\SensorHistoryController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
@@ -45,6 +46,8 @@ Route::middleware(['auth.firebase'])->group(function () {
     
     Route::get('/income', [IncomeController::class, 'index'])->name('income.index');
     Route::get('/income-chart-data', [IncomeController::class, 'chartData']);
+    Route::get('/sensor-history/{device?}', [SensorHistoryController::class, 'index'])->name('sensor-history.index');
+    Route::get('/sensor-history-data', [SensorHistoryController::class, 'summaryData']);
 
     Route::middleware(['role:admin'])->group(function () {
         Route::post('/income', [IncomeController::class, 'store'])->name('income.store');

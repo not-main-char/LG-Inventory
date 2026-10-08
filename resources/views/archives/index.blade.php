@@ -33,7 +33,7 @@
                     @php
                         $data = $item->data();
                         $id = $item->id();
-                        $stampClass = $data['type'] === 'fish' ? 'stamp-fish' : ($data['type'] === 'plant' ? 'stamp-plant' : 'stamp-supplies');
+                        $stampClass = $data['type'] === 'fish' ? 'stamp-fish' : ($data['type'] === 'seed' ? 'stamp-seed' : 'stamp-supplies');
                     @endphp
                     <tr class="border-b border-[#F1ECDC] opacity-75">
                         <td class="p-3 align-middle">

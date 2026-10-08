@@ -44,6 +44,11 @@
                         <span class="text-sm font-medium sidebar-label whitespace-nowrap">Income Ledger</span>
                     </a>
 
+                    <a href="{{ route('sensor-history.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('sensor-history*') ? 'active' : '' }}">
+                        <svg class="nav-ic w-[18px] h-[18px] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+                        <span class="text-sm font-medium sidebar-label whitespace-nowrap">Sensor History</span>
+                    </a>
+
                     <a href="{{ route('reports.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('reports*') ? 'active' : '' }}">
                         <svg class="nav-ic w-[18px] h-[18px] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h9l3 3v15H6z"/><path d="M9 12h6M9 16h6M9 8h3"/></svg>
                         <span class="text-sm font-medium sidebar-label whitespace-nowrap">Reports</span>

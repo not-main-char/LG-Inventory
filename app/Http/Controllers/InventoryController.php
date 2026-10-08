@@ -165,7 +165,7 @@ class InventoryController extends Controller
         // Simplified: no automatic seasonal calculation
         $itemData = [
             'name' => $validated['name'],
-            'type' => $validated['type'], // fish, plant, supplies
+            'type' => $validated['type'], // fish, seed, supplies
             'currentStock' => (float)$validated['currentStock'],
             'unit' => $unit,
             'usageFrequency' => $validated['usageFrequency'] ?? 'manual',
@@ -252,7 +252,7 @@ class InventoryController extends Controller
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255',
-            'type' => 'required|in:fish,plant,supplies',
+            'type' => 'required|in:fish,seed,supplies',
             'currentStock' => 'required|numeric|min:0',
             'unit' => 'required|string|max:50',
             'unitOther' => 'nullable|string|max:50',
@@ -299,7 +299,7 @@ class InventoryController extends Controller
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255',
-            'type' => 'required|in:fish,plant,supplies',
+            'type' => 'required|in:fish,seed,supplies',
             'currentStock' => 'required|numeric|min:0',
             'unit' => 'required|string|max:50',
             'unitOther' => 'nullable|string|max:50',
@@ -612,6 +612,7 @@ class InventoryController extends Controller
             'quantity' => 'required|numeric|min:0.01',
             'deductUnit' => 'required|string',
             'reason' => 'required|string',
+            'customReason' => 'required_if:reason,Other|nullable|string|max:255',
         ]);
 
         try {
@@ -667,6 +668,10 @@ class InventoryController extends Controller
 
             $newStock = $currentStock - $deductAmount;
 
+            $reason = $validated['reason'] === 'Other'
+                ? strtoupper(trim($validated['customReason']))
+                : $validated['reason'];
+
             //use the deduction unit (not the item's original unit)
             $displayUnit = $itemUnit; // Display unit should be the item's base unit after conversion
 
@@ -675,7 +680,7 @@ class InventoryController extends Controller
                 'action' => 'Manual deduction',
                 'quantity' => '-' . $deductAmount . ' ' . $displayUnit,
                 'date' => (Carbon::now('Asia/Manila'))->format('M d, Y H:i'),
-                'notes' => $validated['reason'],
+                'notes' => $reason,
             ];
 
             $docRef->set([
