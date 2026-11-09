@@ -2,14 +2,14 @@
 
 namespace App\Http\Controllers;
 
-use App\Services\FirebaseService;
+use Kreait\Firebase\Contract\Database;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 
 class SensorHistoryController extends Controller
 {
-    protected FirebaseService $firebase;
+    protected Database $database;
 
     // Devices pulled from the RTDB `devices` node.
     // If HYDROLG002 has a different real-world name, just change it here.
@@ -20,48 +20,56 @@ class SensorHistoryController extends Controller
 
     // Fields as they appear on each devices/{id}/sensor_history/{pushKey} record.
     //
-    // "zones" define the gauge's safe/watch/alert bands (used for the dial
-    // color and the Optimal/Watch/Alert stamp). These are draft aquaponics
-    // defaults (tilapia + leafy greens) — confirm the real numbers with
-    // your adviser/paper and adjust here; nothing else needs to change.
-    // waterLevel has no zones — it's rendered as a level bar, not a gauge,
-    // since there's no established safe range for it yet.
+    // "normal" is the [min, max] range a reading must stay inside to count
+    // as Normal — these are the SAME thresholds the HydroSolar mobile app
+    // uses (null = no limit on that side). Change them here and both the
+    // dial colors and the Normal/Error stamp follow.
+    // "min"/"max" are only the dial's display span, and "zones" are the
+    // colored bands drawn on it (green = inside normal, red = outside).
     protected array $sensors = [
         'airTemperature' => [
             'label' => 'Air Temperature', 'unit' => '°C', 'kind' => 'gauge',
-            'min' => 15, 'max' => 40,
-            'zones' => [[15, 20, 'alert'], [20, 24, 'watch'], [24, 32, 'optimal'], [32, 35, 'watch'], [35, 40, 'alert']],
+            'normal' => [35, 40],
+            'min' => 0, 'max' => 50,
+            'zones' => [[0, 35, 'alert'], [35, 40, 'optimal'], [40, 50, 'alert']],
         ],
         'waterTemperature' => [
             'label' => 'Water Temperature', 'unit' => '°C', 'kind' => 'gauge',
-            'min' => 18, 'max' => 36,
-            'zones' => [[18, 22, 'alert'], [22, 26, 'watch'], [26, 30, 'optimal'], [30, 32, 'watch'], [32, 36, 'alert']],
+            'normal' => [28, 32],
+            'min' => 15, 'max' => 40,
+            'zones' => [[15, 28, 'alert'], [28, 32, 'optimal'], [32, 40, 'alert']],
         ],
         'turbidityPercent' => [
             'label' => 'Turbidity', 'unit' => '%', 'kind' => 'gauge',
+            'normal' => [0, 50],
             'min' => 0, 'max' => 100,
-            'zones' => [[0, 20, 'optimal'], [20, 40, 'watch'], [40, 100, 'alert']],
+            'zones' => [[0, 50, 'optimal'], [50, 100, 'alert']],
         ],
         'humidity' => [
             'label' => 'Humidity', 'unit' => '%', 'kind' => 'gauge',
-            'min' => 20, 'max' => 100,
-            'zones' => [[20, 40, 'alert'], [40, 50, 'watch'], [50, 75, 'optimal'], [75, 85, 'watch'], [85, 100, 'alert']],
+            'normal' => [60, 70],
+            'min' => 0, 'max' => 100,
+            'zones' => [[0, 60, 'alert'], [60, 70, 'optimal'], [70, 100, 'alert']],
         ],
         'pH' => [
             'label' => 'pH Level', 'unit' => '', 'kind' => 'gauge',
-            'min' => 4, 'max' => 10,
-            'zones' => [[4, 6, 'alert'], [6, 6.5, 'watch'], [6.5, 8, 'optimal'], [8, 8.5, 'watch'], [8.5, 10, 'alert']],
+            'normal' => [6.5, 7.2],
+            'min' => 0, 'max' => 14,
+            'zones' => [[0, 6.5, 'alert'], [6.5, 7.2, 'optimal'], [7.2, 14, 'alert']],
         ],
+        // The mobile app lists this as "<50-80%"; read here as 50-80% is
+        // normal. Edit 'normal' if the real rule is different.
         'waterLevel' => [
-            'label' => 'Water Level', 'unit' => 'cm', 'kind' => 'level',
+            'label' => 'Water Level', 'unit' => '%', 'kind' => 'level',
+            'normal' => [50, 80],
             'min' => 0, 'max' => 100,
             'zones' => null,
         ],
     ];
 
-    public function __construct(FirebaseService $firebase)
+    public function __construct(Database $database)
     {
-        $this->firebase = $firebase;
+        $this->database = $database;
     }
 
     public function index(string $device = 'HYDROLG001')
@@ -78,12 +86,12 @@ class SensorHistoryController extends Controller
     }
 
     /**
-     * AJAX endpoint: /sensor-history-data?device=HYDROLG001&range=day|week|month&date=Y-m-d
+     * AJAX endpoint: /sensor-history-data?device=HYDROLG001&range=hour|day|week|month&date=Y-m-d&hour=0-23
      */
     public function summaryData(Request $request)
     {
         $device = $request->get('device', 'HYDROLG001');
-        $range  = in_array($request->get('range'), ['day', 'week', 'month'], true)
+        $range  = in_array($request->get('range'), ['hour', 'day', 'week', 'month'], true)
             ? $request->get('range')
             : 'day';
 
@@ -95,7 +103,14 @@ class SensorHistoryController extends Controller
             ? Carbon::parse($request->get('date'), 'Asia/Manila')
             : Carbon::now('Asia/Manila');
 
-        $cacheKey = "sensor_summary_{$device}_{$range}_{$anchor->format('Y-m-d')}";
+        // Hour view zooms into one clock hour of the chosen date.
+        if ($range === 'hour') {
+            $hour   = max(0, min(23, (int) $request->get('hour', $anchor->hour)));
+            $anchor = $anchor->copy()->setTime($hour, 0, 0);
+        }
+
+        $stamp    = $anchor->format($range === 'hour' ? 'Y-m-d-H' : 'Y-m-d');
+        $cacheKey = "sensor_summary_{$device}_{$range}_{$stamp}";
 
         $result = Cache::remember($cacheKey, 300, function () use ($device, $range, $anchor) {
             [$start, $end] = $this->rangeBounds($range, $anchor);
@@ -114,6 +129,7 @@ class SensorHistoryController extends Controller
     protected function rangeBounds(string $range, Carbon $anchor): array
     {
         return match ($range) {
+            'hour'  => [$anchor->copy()->startOfHour(), $anchor->copy()->endOfHour()],
             'week'  => [$anchor->copy()->startOfWeek(), $anchor->copy()->endOfWeek()],
             'month' => [$anchor->copy()->startOfMonth(), $anchor->copy()->endOfMonth()],
             default => [$anchor->copy()->startOfDay(), $anchor->copy()->endOfDay()],
@@ -123,6 +139,7 @@ class SensorHistoryController extends Controller
     protected function shift(string $range, Carbon $anchor, int $direction): Carbon
     {
         return match ($range) {
+            'hour'  => $anchor->copy()->addHours($direction),
             'week'  => $anchor->copy()->addWeeks($direction),
             'month' => $anchor->copy()->addMonths($direction),
             default => $anchor->copy()->addDays($direction),
@@ -132,6 +149,7 @@ class SensorHistoryController extends Controller
     protected function rangeLabel(string $range, Carbon $anchor): string
     {
         return match ($range) {
+            'hour'  => $anchor->format('F j, Y, g A').' to '.$anchor->copy()->addHour()->format('g A'),
             'week'  => $anchor->copy()->startOfWeek()->format('M j').' - '.$anchor->copy()->endOfWeek()->format('M j, Y'),
             'month' => $anchor->format('F Y'),
             default => $anchor->format('F j, Y'),
@@ -147,7 +165,7 @@ class SensorHistoryController extends Controller
      */
     protected function fetchReadings(string $device, Carbon $start, Carbon $end): array
     {
-        $reference = $this->firebase->getDatabase()
+        $reference = $this->database
             ->getReference("devices/{$device}/sensor_history");
 
         $all = $reference->getValue();
@@ -178,6 +196,11 @@ class SensorHistoryController extends Controller
 
     protected function summarize(array $readings, string $range, Carbon $start, Carbon $end): array
     {
+        // Hour view shows every raw reading as its own point (no averaging).
+        if ($range === 'hour') {
+            return $this->summarizeHour($readings, $start, $end);
+        }
+
         $sensorKeys = array_keys($this->sensors);
         [$slotMinutes, $labelFormat] = $this->slotConfig($range);
 
@@ -218,7 +241,7 @@ class SensorHistoryController extends Controller
         $labels = [];
         $series = [];
         foreach ($sensorKeys as $key) {
-            $series[$key] = ['avg' => [], 'low' => [], 'high' => []];
+            $series[$key] = ['avg' => [], 'low' => [], 'high' => [], 'count' => []];
         }
 
         foreach ($slots as $i => $slotStart) {
@@ -232,16 +255,36 @@ class SensorHistoryController extends Controller
                 ), fn ($v) => $v !== null));
 
                 $series[$key]['avg'][]  = count($values) ? round(array_sum($values) / count($values), 2) : null;
-                $series[$key]['low'][]  = count($values) ? min($values) : null;
-                $series[$key]['high'][] = count($values) ? max($values) : null;
+                $series[$key]['low'][]  = count($values) ? round(min($values), 2) : null;
+                $series[$key]['high'][] = count($values) ? round(max($values), 2) : null;
+                // How many raw readings landed in this time slot (shown in the chart tooltip).
+                $series[$key]['count'][] = count($values);
             }
         }
 
-        // Overall stat-card summary across the whole requested range
-        // (this is what drives the 6 sensor cards, regardless of which
-        // sensor's chart is currently open).
+        $overall = $this->overallStats($readings);
+
+        return [
+            'labels'  => $labels,
+            // Start time of each slot, so the page can zoom in when a dot is clicked.
+            'slots'   => array_map(fn ($slot) => $slot->format('Y-m-d\TH:i'), $slots),
+            'series'  => $series,
+            'overall' => $overall,
+            'count'   => count($readings),
+            'range'   => $range,
+            'start'   => $start->format('Y-m-d'),
+            'end'     => $end->format('Y-m-d'),
+        ];
+    }
+
+    /**
+     * Avg / lowest / highest per sensor across every reading in the range
+     * (drives the 6 sensor tiles).
+     */
+    protected function overallStats(array $readings): array
+    {
         $overall = [];
-        foreach ($sensorKeys as $key) {
+        foreach (array_keys($this->sensors) as $key) {
             $allValues = array_values(array_filter(array_map(
                 fn ($r) => isset($r[$key]) ? (float) $r[$key] : null,
                 $readings
@@ -249,17 +292,57 @@ class SensorHistoryController extends Controller
 
             $overall[$key] = [
                 'avg'  => count($allValues) ? round(array_sum($allValues) / count($allValues), 2) : null,
-                'low'  => count($allValues) ? min($allValues) : null,
-                'high' => count($allValues) ? max($allValues) : null,
+                'low'  => count($allValues) ? round(min($allValues), 2) : null,
+                'high' => count($allValues) ? round(max($allValues), 2) : null,
             ];
+        }
+
+        return $overall;
+    }
+
+    /**
+     * Hour view: one point per raw reading, in time order, labelled with its
+     * exact time. low = high = avg here because nothing is grouped.
+     */
+    protected function summarizeHour(array $readings, Carbon $start, Carbon $end): array
+    {
+        $sensorKeys = array_keys($this->sensors);
+
+        $timed = [];
+        foreach ($readings as $reading) {
+            $time = $this->readingTime($reading);
+            if ($time) {
+                $timed[] = [$time, $reading];
+            }
+        }
+        usort($timed, fn ($a, $b) => $a[0]->getTimestamp() <=> $b[0]->getTimestamp());
+
+        $labels = [];
+        $slots  = [];
+        $series = [];
+        foreach ($sensorKeys as $key) {
+            $series[$key] = ['avg' => [], 'low' => [], 'high' => [], 'count' => []];
+        }
+
+        foreach ($timed as [$time, $reading]) {
+            $labels[] = $time->format('g:i:s A');
+            $slots[]  = $time->format('Y-m-d\TH:i');
+            foreach ($sensorKeys as $key) {
+                $value = isset($reading[$key]) ? round((float) $reading[$key], 2) : null;
+                $series[$key]['avg'][]   = $value;
+                $series[$key]['low'][]   = $value;
+                $series[$key]['high'][]  = $value;
+                $series[$key]['count'][] = $value === null ? 0 : 1;
+            }
         }
 
         return [
             'labels'  => $labels,
+            'slots'   => $slots,
             'series'  => $series,
-            'overall' => $overall,
-            'count'   => count($readings),
-            'range'   => $range,
+            'overall' => $this->overallStats($readings),
+            'count'   => count($timed),
+            'range'   => 'hour',
             'start'   => $start->format('Y-m-d'),
             'end'     => $end->format('Y-m-d'),
         ];

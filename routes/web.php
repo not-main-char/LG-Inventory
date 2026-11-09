@@ -8,6 +8,7 @@ use App\Http\Controllers\AdminController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\SensorHistoryController;
+use App\Http\Controllers\HarvestController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
@@ -28,6 +29,7 @@ Route::middleware(['auth.firebase'])->group(function () {
     Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
     
     Route::get('/inventory', [InventoryController::class, 'index'])->name('inventory.index');
+    Route::get('/inventory/harvest', [HarvestController::class, 'index'])->name('harvest.index');
     Route::get('/inventory/{id}/history', [InventoryController::class, 'stockHistory']);
     Route::get('/inventory/known-conversion', [InventoryController::class, 'knownConversion']); 
     
@@ -42,6 +44,12 @@ Route::middleware(['auth.firebase'])->group(function () {
         Route::get('/inventory/archived', [InventoryController::class, 'archived']) ->name('inventory.archived');
         Route::post('/inventory/consume-daily', [InventoryController::class, 'runDailyConsumption']);
         Route::post('/inventory/restock', [InventoryController::class, 'restock'])->name('inventory.restock');
+
+        Route::post('/inventory/harvest', [HarvestController::class, 'store'])->name('harvest.store');
+        Route::post('/inventory/harvest/dispose', [HarvestController::class, 'storeDisposal'])->name('harvest.dispose');
+        Route::post('/inventory/harvest/prices', [HarvestController::class, 'savePrice'])->name('harvest.price');
+        Route::post('/inventory/harvest/{id}/archive', [HarvestController::class, 'archive'])->name('harvest.archive');
+        Route::post('/inventory/harvest/disposals/{id}/archive', [HarvestController::class, 'archiveDisposal'])->name('harvest.disposal.archive');
     });
     
     Route::get('/income', [IncomeController::class, 'index'])->name('income.index');
@@ -51,7 +59,6 @@ Route::middleware(['auth.firebase'])->group(function () {
 
     Route::middleware(['role:admin'])->group(function () {
         Route::post('/income', [IncomeController::class, 'store'])->name('income.store');
-        Route::put('/income/{income}', [IncomeController::class, 'update'])->name('income.update');
         Route::post('/income/{id}/archive', [IncomeController::class, 'archive'])->name('income.archive');
         Route::post('/income/{id}/restore', [IncomeController::class, 'restore']) ->name('income.restore');
         Route::get('/income/archived', [IncomeController::class, 'archived'])->name('income.archived');

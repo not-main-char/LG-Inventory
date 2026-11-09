@@ -1,6 +1,7 @@
 @extends('layouts.app', ['title' => 'Inventory'])
 
 @section('content')
+@include('inventory._tabs', ['active' => 'stock'])
 @php
     use App\Support\InventoryAlerts;
     $lowStockCount = 0;

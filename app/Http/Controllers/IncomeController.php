@@ -6,6 +6,9 @@ use Illuminate\Http\Request;
 use Kreait\Firebase\Contract\Firestore;
 use Illuminate\Support\Facades\Cache; 
 use Carbon\Carbon;
+use App\Support\HarvestStock;
+use Google\Cloud\Firestore\Transaction;
+use Illuminate\Support\Facades\Log;
 
 
 class CachedIncomeDocument
@@ -44,9 +47,10 @@ class IncomeController extends Controller
         $this->firestore = $firestore->database();
     }
     
-    public function index(Request $request)
+    public function index(Request $request, HarvestStock $harvestStock)
     {
         $role = $request->attributes->get('firebase_role');
+        $availableStock = $harvestStock->availableProducts();
 
         //Cache transaction data locally
         $sales = Cache::remember('income_list', 300, function () {
@@ -137,134 +141,249 @@ class IncomeController extends Controller
         }
 
         return view('income.index', compact(
-            'sales', 'role', 'totalIncome', 'currentMonthFish', 'currentMonthPlant', 'lastMonthFish', 'lastMonthPlant', 'highestFishMonth', 'highestPlantMonth'
+            'sales', 'role', 'totalIncome', 'currentMonthFish', 'currentMonthPlant', 'lastMonthFish', 'lastMonthPlant', 'highestFishMonth', 'highestPlantMonth', 'availableStock'
         ));
     }
     
-    public function store(Request $request)
+    /**
+     * Record a sale from harvest stock.
+     *
+     * The page sends the product (from the available harvest stock), the
+     * quantity, wholesale/retail, the base price per unit and a discount %.
+     * The final price and total are computed here, never trusted from the
+     * browser. Stock is taken from the oldest harvest first, inside a
+     * Firestore transaction so two sales can't take the same kilos.
+     */
+    public function store(Request $request, HarvestStock $harvestStock)
     {
-        $validated = $request->validate([
-            'itemName' => 'required|string',
-            'type' => 'required|in:fish,plant',
-            'quantitySold' => 'required|numeric|min:0.01',
-            'unit' => 'required|in:kilos,pcs',
-            'saleAmount' => 'required|numeric|min:0.01',
-            'date' => 'required|date',
-            'notes' => 'nullable|string'
+        $v = $request->validate([
+            'stockKey'        => 'required|string',
+            'quantitySold'    => 'required|numeric|min:0.01',
+            'saleType'        => 'required|in:wholesale,retail',
+            'unitPrice'       => 'required|numeric|min:0',
+            'discountPercent' => 'required|numeric|min:0|max:100',
+            'date'            => 'required|date',
+            'notes'           => 'nullable|string|max:500',
         ]);
-        
-        // Item names are labels, so keep them consistently uppercase.
-        // Notes are intentionally preserved as entered because they are
-        // sentence-style text and are easier to read in normal casing.
-        $validated['itemName'] = strtoupper(trim($validated['itemName']));
 
-        $date = Carbon::parse($validated['date']);
-        $season = $date->format('F Y'); 
-        
-        $saleData = [
-            'itemName' => $validated['itemName'],
-            'type' => $validated['type'],
-            'quantitySold' => $validated['quantitySold'],
-            'unit' => $validated['unit'],
-            'saleAmount' => $validated['saleAmount'],
-            'date' => $date,
-            'season' => $season,
-            'notes' => $validated['notes'] ?? '',
-            'createdBy' => request()->attributes->get('firebase_user'),
-            'createdAt' => Carbon::now('Asia/Manila')
-        ];
-        
-        $this->firestore->collection('sales')->newDocument()->set($saleData);
+        [$product, $unit] = array_pad(explode('|', $v['stockKey'], 2), 2, '');
+        if ($product === '' || !in_array($unit, ['kilos', 'pcs'], true)) {
+            return back()->withErrors(['stockKey' => 'Choose a product from the harvest stock.'])->withInput();
+        }
 
-        // Wipe out the sales and dashboard caches so calculations reset immediately
-        Cache::forget('income_list');
-        Cache::forget('income_chart_data_' . date('Y'));
-        Cache::forget('income_chart_data');
-        Cache::forget('dashboard_stats');
-        Cache::forget('sales_chart_data');
+        $qty            = round((float) $v['quantitySold'], 4);
+        $unitPrice      = round((float) $v['unitPrice'], 2);
+        $discount       = round((float) $v['discountPercent'], 2);
+        $finalUnitPrice = round($unitPrice * (1 - $discount / 100), 2);
+        $total          = round($finalUnitPrice * $qty, 2);
+
+        if ($total <= 0) {
+            return back()->withErrors(['unitPrice' => 'The total must be more than ₱0. Check the price and discount.'])->withInput();
+        }
+
+        // Oldest harvest first (activeHarvests() is sorted by harvest date).
+        $candidateIds = [];
+        foreach ($harvestStock->activeHarvests() as $h) {
+            if ($h['product'] === $product && $h['unit'] === $unit && $h['remaining'] > 0.00001) {
+                $candidateIds[] = $h['id'];
+            }
+        }
+        if (!$candidateIds) {
+            return back()->withErrors(['stockKey' => 'There is no stock left for that product.'])->withInput();
+        }
+
+        $date = Carbon::parse($v['date']);
+        $user = $request->attributes->get('firebase_user');
+
+        try {
+            $this->firestore->runTransaction(function (Transaction $t) use ($candidateIds, $qty, $product, $unit, $unitPrice, $discount, $finalUnitPrice, $total, $v, $date, $user) {
+                // Firestore transactions need every read before any write.
+                $batches = [];
+                foreach ($candidateIds as $hid) {
+                    $ref = $this->firestore->collection('harvests')->document($hid);
+                    $batches[$hid] = [$ref, $t->snapshot($ref)];
+                }
+
+                $need = $qty;
+                $allocations = [];
+                $updates = [];
+                $sources = [];
+                $kind = null;
+
+                foreach ($batches as $hid => [$ref, $snap]) {
+                    if (!$snap->exists()) {
+                        continue;
+                    }
+                    $h = $snap->data();
+                    if (($h['status'] ?? 'active') === 'archived') {
+                        continue;
+                    }
+                    $remaining = (float) ($h['remainingQuantity'] ?? 0);
+                    if ($remaining <= 0.00001) {
+                        continue;
+                    }
+
+                    $take = min($remaining, $need);
+                    $allocations[] = ['harvestId' => $hid, 'quantity' => round($take, 4)];
+                    $updates[] = [$ref, round($remaining - $take, 4)];
+                    $kind ??= ($h['kind'] ?? 'plant');
+                    if (!empty($h['source'])) {
+                        $sources[$h['source']] = true;
+                    }
+
+                    $need = round($need - $take, 4);
+                    if ($need <= 0.00001) {
+                        break;
+                    }
+                }
+
+                if ($need > 0.00001) {
+                    $available = round($qty - $need, 4);
+                    throw new \RuntimeException("Not enough stock. Only {$available} {$unit} of {$product} is available.");
+                }
+
+                foreach ($updates as [$ref, $newRemaining]) {
+                    $t->set($ref, ['remainingQuantity' => $newRemaining], ['merge' => true]);
+                }
+
+                $t->create($this->firestore->collection('sales')->newDocument(), [
+                    // These first fields are what the dashboard, charts and reports already read.
+                    'itemName'        => $product,
+                    'type'            => $kind ?? 'plant',
+                    'quantitySold'    => $qty,
+                    'unit'            => $unit,
+                    'saleAmount'      => $total,
+                    'date'            => $date,
+                    'season'          => $date->format('F Y'),
+                    'notes'           => $v['notes'] ?? '',
+                    // Harvest-based sale details.
+                    'saleType'        => $v['saleType'],
+                    'unitPrice'       => $unitPrice,
+                    'discountPercent' => $discount,
+                    'finalUnitPrice'  => $finalUnitPrice,
+                    'allocations'     => $allocations,
+                    'sources'         => array_keys($sources),
+                    'createdBy'       => $user,
+                    'createdAt'       => Carbon::now('Asia/Manila'),
+                ]);
+            });
+        } catch (\Throwable $e) {
+            return $this->fail($e);
+        }
+
+        $this->forgetSalesCaches();
 
         return redirect()->route('income.index')->with('success', 'Sale recorded');
     }
 
-    public function update(Request $request, $id)
-    {
-        $validated = $request->validate([
-            'itemName' => 'required|string',
-            'type' => 'required|in:fish,plant',
-            'quantitySold' => 'required|numeric|min:0.01',
-            'unit' => 'required|in:kilos,pcs',
-            'saleAmount' => 'required|numeric|min:0.01',
-            'date' => 'required|date',
-            'notes' => 'nullable|string'
-        ]);
-
-        // Item names are labels, so keep them consistently uppercase.
-        // Notes remain in normal sentence case for readability.
-        $validated['itemName'] = strtoupper(trim($validated['itemName']));
-
-        $docRef = $this->firestore->collection('sales')->document($id);
-        $snapshot = $docRef->snapshot();
-        if (!$snapshot->exists()) {
-            return back()->withErrors(['error' => 'Sale record not found']);
-        }
-
-        $date = Carbon::parse($validated['date']);
-        $season = $date->format('F Y');
-
-        $docRef->set([
-            'itemName' => $validated['itemName'],
-            'type' => $validated['type'],
-            'quantitySold' => $validated['quantitySold'],
-            'unit' => $validated['unit'],
-            'saleAmount' => $validated['saleAmount'],
-            'date' => $date,
-            'season' => $season,
-            'notes' => $validated['notes'] ?? '',
-            'updatedBy' => request()->attributes->get('firebase_user'),
-            'updatedAt' => Carbon::now('Asia/Manila'),
-        ], ['merge' => true]);
-
-        Cache::forget('income_list');
-        Cache::forget('income_chart_data_' . date('Y'));
-        Cache::forget('income_chart_data');
-        Cache::forget('dashboard_stats');
-        Cache::forget('sales_chart_data');
-
-        return redirect()->route('income.index')->with('success', 'Sale updated');
-    }
-    
+    /** Archiving a sale puts its quantity back into the harvest batches it came from. */
     public function archive(string $id)
     {
-        $this->firestore->collection('sales')->document($id)->set([
-            'status' => 'archived',
-            'archivedAt' => Carbon::now('Asia/Manila')
-        ], ['merge' => true]);
+        try {
+            $this->firestore->runTransaction(function (Transaction $t) use ($id) {
+                $saleRef  = $this->firestore->collection('sales')->document($id);
+                $saleSnap = $t->snapshot($saleRef);
+                if (!$saleSnap->exists()) {
+                    throw new \RuntimeException('Sale record not found.');
+                }
 
-        Cache::forget('income_list');
-        Cache::forget('income_archived_list');
-        Cache::forget('income_chart_data_' . date('Y'));
-        Cache::forget('income_chart_data');
-        Cache::forget('dashboard_stats');
-        Cache::forget('sales_chart_data');
+                $sale = $saleSnap->data();
+                if (($sale['status'] ?? 'active') === 'archived') {
+                    return;
+                }
+
+                $batches = [];
+                foreach (($sale['allocations'] ?? []) as $a) {
+                    $ref = $this->firestore->collection('harvests')->document($a['harvestId']);
+                    $batches[] = [$ref, $t->snapshot($ref), (float) ($a['quantity'] ?? 0)];
+                }
+
+                foreach ($batches as [$ref, $snap, $quantity]) {
+                    if ($snap->exists()) {
+                        $remaining = (float) ($snap->data()['remainingQuantity'] ?? 0);
+                        $t->set($ref, ['remainingQuantity' => round($remaining + $quantity, 4)], ['merge' => true]);
+                    }
+                }
+
+                $t->set($saleRef, ['status' => 'archived', 'archivedAt' => Carbon::now('Asia/Manila')], ['merge' => true]);
+            });
+        } catch (\Throwable $e) {
+            return $this->fail($e);
+        }
+
+        $this->forgetSalesCaches();
 
         return redirect()->route('income.index')->with('success', 'Sale archived');
     }
 
+    /** Restoring a sale takes its quantity out of the harvest again, if there is still enough. */
     public function restore(string $id)
     {
-        $this->firestore->collection('sales')->document($id)->set([
-            'status' => 'active',
-            'restoredAt' => Carbon::now('Asia/Manila')
-        ], ['merge' => true]);
+        try {
+            $this->firestore->runTransaction(function (Transaction $t) use ($id) {
+                $saleRef  = $this->firestore->collection('sales')->document($id);
+                $saleSnap = $t->snapshot($saleRef);
+                if (!$saleSnap->exists()) {
+                    throw new \RuntimeException('Sale record not found.');
+                }
 
+                $sale = $saleSnap->data();
+                if (($sale['status'] ?? 'active') !== 'archived') {
+                    return;
+                }
+
+                $batches = [];
+                foreach (($sale['allocations'] ?? []) as $a) {
+                    $ref = $this->firestore->collection('harvests')->document($a['harvestId']);
+                    $batches[] = [$ref, $t->snapshot($ref), (float) ($a['quantity'] ?? 0)];
+                }
+
+                $updates = [];
+                foreach ($batches as [$ref, $snap, $quantity]) {
+                    if (!$snap->exists() || (($snap->data()['status'] ?? 'active') === 'archived')) {
+                        throw new \RuntimeException('This sale cannot be restored because its harvest was archived.');
+                    }
+                    $remaining = (float) ($snap->data()['remainingQuantity'] ?? 0);
+                    if ($quantity > $remaining + 0.00001) {
+                        throw new \RuntimeException('This sale cannot be restored because that harvest no longer has enough stock.');
+                    }
+                    $updates[] = [$ref, round($remaining - $quantity, 4)];
+                }
+
+                foreach ($updates as [$ref, $newRemaining]) {
+                    $t->set($ref, ['remainingQuantity' => $newRemaining], ['merge' => true]);
+                }
+
+                $t->set($saleRef, ['status' => 'active', 'restoredAt' => Carbon::now('Asia/Manila')], ['merge' => true]);
+            });
+        } catch (\Throwable $e) {
+            return $this->fail($e);
+        }
+
+        $this->forgetSalesCaches();
+
+        return redirect()->route('income.archived')->with('success', 'Sale restored');
+    }
+
+    protected function forgetSalesCaches(): void
+    {
         Cache::forget('income_list');
         Cache::forget('income_archived_list');
         Cache::forget('income_chart_data_' . date('Y'));
         Cache::forget('income_chart_data');
         Cache::forget('dashboard_stats');
         Cache::forget('sales_chart_data');
+    }
 
-        return redirect()->route('income.archived')->with('success', 'Sale restored');
+    protected function fail(\Throwable $e)
+    {
+        if ($e instanceof \RuntimeException) {
+            return back()->withErrors(['error' => $e->getMessage()])->withInput();
+        }
+
+        Log::error('Sale action failed: ' . $e->getMessage());
+
+        return back()->withErrors(['error' => 'Something went wrong. Please try again.']);
     }
 
     public function archived(Request $request)
