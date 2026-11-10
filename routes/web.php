@@ -8,6 +8,7 @@ use App\Http\Controllers\AdminController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\SensorHistoryController;
+use App\Http\Controllers\FishpondController;
 use App\Http\Controllers\HarvestController;
 use Illuminate\Support\Facades\Route;
 
@@ -56,6 +57,9 @@ Route::middleware(['auth.firebase'])->group(function () {
     Route::get('/income-chart-data', [IncomeController::class, 'chartData']);
     Route::get('/sensor-history/{device?}', [SensorHistoryController::class, 'index'])->name('sensor-history.index');
     Route::get('/sensor-history-data', [SensorHistoryController::class, 'summaryData']);
+
+    Route::get('/fish-monitoring/{device?}', [FishpondController::class, 'index'])->name('fishpond.index');
+    Route::get('/fishpond-records', [FishpondController::class, 'records'])->name('fishpond.records');
 
     Route::middleware(['role:admin'])->group(function () {
         Route::post('/income', [IncomeController::class, 'store'])->name('income.store');

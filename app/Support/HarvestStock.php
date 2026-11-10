@@ -17,9 +17,12 @@ class HarvestStock
 {
     protected $db;
 
-    public function __construct(Firestore $firestore)
+    protected PriceBook $book;
+
+    public function __construct(Firestore $firestore, PriceBook $book)
     {
-        $this->db = $firestore->database();
+        $this->db   = $firestore->database();
+        $this->book = $book;
     }
 
     /** Document id used for a product's row in the price_reference collection. */
@@ -49,8 +52,10 @@ class HarvestStock
                 'quantity'    => (float) ($d['quantity'] ?? 0),
                 'remaining'   => (float) ($d['remainingQuantity'] ?? 0),
                 'harvestDate' => $d['harvestDate'] ?? '',
-                'notes'       => $d['notes'] ?? '',
+                'notes'       => (string) ($d['notes'] ?? ''),
                 'seedItemId'  => $d['seedItemId'] ?? null,
+                'deviceId'      => $d['deviceId'] ?? null,
+                'deviceEventKey' => $d['deviceEventKey'] ?? null,
             ];
         }
         usort($rows, fn ($a, $b) => [$a['harvestDate'], $a['id']] <=> [$b['harvestDate'], $b['id']]);
@@ -68,14 +73,70 @@ class HarvestStock
             }
             $d = $doc->data();
             $rows[$doc->id()] = [
-                'id'          => $doc->id(),
-                'product'     => $d['product'] ?? '',
-                'unit'        => $d['unit'] ?? 'kilos',
-                'retailPrice' => (float) ($d['retailPrice'] ?? 0),
-                'note'        => $d['note'] ?? '',
-                'updatedOn'   => $d['updatedOn'] ?? '',
+                'id'             => $doc->id(),
+                'product'        => $d['product'] ?? '',
+                'unit'           => $d['unit'] ?? 'kilos',
+                'retailPrice'    => (float) ($d['retailPrice'] ?? 0),
+                'wholesalePrice' => isset($d['wholesalePrice']) ? (float) $d['wholesalePrice'] : null,
+                'floorPrice'     => isset($d['floorPrice']) ? (float) $d['floorPrice'] : null,
+                'ceilingPrice'   => isset($d['ceilingPrice']) ? (float) $d['ceilingPrice'] : null,
+                'piecesPerKg'    => isset($d['piecesPerKg']) ? (float) $d['piecesPerKg'] : null,
+                'note'           => $d['note'] ?? '',
+                'updatedOn'      => $d['updatedOn'] ?? '',
             ];
         }
+        uasort($rows, fn ($a, $b) => strcmp($a['product'] . $a['unit'], $b['product'] . $b['unit']));
+
+        return $rows;
+    }
+
+    /**
+     * Every price in force, keyed by product + unit: the rows saved in the
+     * price book, plus a row for each crop currently in stock that is priced
+     * from the DA Region I feed or from an estimate. So the Price Reference tab
+     * shows what a sale would actually use, not just what an admin typed.
+     */
+    public function priceList(?array $harvests = null, ?array $prices = null): array
+    {
+        $prices   ??= $this->priceReferences();
+        $harvests ??= $this->activeHarvests();
+
+        $rows = [];
+        foreach ($prices as $id => $row) {
+            $rows[$id] = $row + ['estimated' => false, 'saved' => true];
+        }
+
+        foreach ($harvests as $h) {
+            if ($h['remaining'] <= 0.00001) {
+                continue;
+            }
+
+            $id = self::priceId($h['product'], $h['unit']);
+            if (isset($rows[$id])) {
+                continue; // an admin price already applies
+            }
+
+            $ref = $this->referenceFor($h['product'], $h['unit'], $prices);
+            if ($ref['price'] === null) {
+                continue; // nobody publishes it and nothing was saved
+            }
+
+            $rows[$id] = [
+                'id'             => $id,
+                'product'        => $h['product'],
+                'unit'           => $h['unit'],
+                'retailPrice'    => $ref['price'],
+                'wholesalePrice' => $ref['wholesale'],
+                'floorPrice'     => $ref['floor'],
+                'ceilingPrice'   => $ref['ceiling'],
+                'piecesPerKg'    => $ref['piecesPerKg'],
+                'note'           => $ref['priceNote'],
+                'updatedOn'      => $ref['priceUpdatedOn'] ?? '',
+                'estimated'      => $ref['priceEstimated'],
+                'saved'          => false,
+            ];
+        }
+
         uasort($rows, fn ($a, $b) => strcmp($a['product'] . $a['unit'], $b['product'] . $b['unit']));
 
         return $rows;
@@ -97,15 +158,12 @@ class HarvestStock
             }
             $key = $h['product'] . '|' . $h['unit'];
             if (!isset($groups[$key])) {
-                $price = $prices[self::priceId($h['product'], $h['unit'])] ?? null;
-                $groups[$key] = [
-                    'key'            => $key,
-                    'product'        => $h['product'],
-                    'unit'           => $h['unit'],
-                    'kind'           => $h['kind'],
-                    'remaining'      => 0.0,
-                    'price'          => $price['retailPrice'] ?? null,
-                    'priceUpdatedOn' => $price['updatedOn'] ?? null,
+                $groups[$key] = $this->referenceFor($h['product'], $h['unit'], $prices) + [
+                    'key'       => $key,
+                    'product'   => $h['product'],
+                    'unit'      => $h['unit'],
+                    'kind'      => $h['kind'],
+                    'remaining' => 0.0,
                 ];
             }
             $groups[$key]['remaining'] = round($groups[$key]['remaining'] + $h['remaining'], 4);
@@ -113,5 +171,56 @@ class HarvestStock
         ksort($groups);
 
         return array_values($groups);
+    }
+
+    /**
+     * Where the price for this product starts from.
+     *
+     * A price saved on the Harvest page always wins. Otherwise the price book
+     * answers from the DA Region I list, and for a crop nobody publishes it
+     * returns a clearly-marked estimate instead of leaving the box empty.
+     */
+    protected function referenceFor(string $product, string $unit, array $prices): array
+    {
+        $empty = [
+            'price'          => null,
+            'wholesale'      => null,
+            'floor'          => null,
+            'ceiling'        => null,
+            'piecesPerKg'    => null,
+            'priceNote'      => '',
+            'priceUpdatedOn' => null,
+            'priceEstimated' => false,
+        ];
+
+        $saved = $prices[self::priceId($product, $unit)] ?? null;
+        if ($saved && ($saved['retailPrice'] ?? 0) > 0) {
+            return [
+                'price'          => $saved['retailPrice'],
+                'wholesale'      => $saved['wholesalePrice'],
+                'floor'          => $saved['floorPrice'],
+                'ceiling'        => $saved['ceilingPrice'],
+                'piecesPerKg'    => $saved['piecesPerKg'],
+                'priceNote'      => $saved['note'],
+                'priceUpdatedOn' => $saved['updatedOn'],
+                'priceEstimated' => false,
+            ];
+        }
+
+        $ref = $this->book->resolve($product, $unit);
+        if (!$ref) {
+            return $empty;
+        }
+
+        return [
+            'price'          => $ref['price'],
+            'wholesale'      => $ref['wholesale'],
+            'floor'          => $ref['floor'],
+            'ceiling'        => $ref['ceiling'],
+            'piecesPerKg'    => $ref['piecesPerKg'],
+            'priceNote'      => $ref['note'],
+            'priceUpdatedOn' => $ref['updatedOn'],
+            'priceEstimated' => !empty($ref['estimated']),
+        ];
     }
 }

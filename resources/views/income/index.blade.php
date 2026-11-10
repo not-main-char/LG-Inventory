@@ -169,7 +169,11 @@
                                 data-kind="{{ $s['kind'] }}"
                                 data-remaining="{{ $s['remaining'] }}"
                                 data-price="{{ $s['price'] ?? '' }}"
-                                data-price-on="{{ $s['priceUpdatedOn'] ?? '' }}">
+                                data-price-on="{{ $s['priceUpdatedOn'] ?? '' }}"
+                                data-wholesale="{{ $s['wholesale'] ?? '' }}"
+                                data-floor="{{ $s['floor'] ?? '' }}"
+                                data-ceiling="{{ $s['ceiling'] ?? '' }}"
+                                data-note="{{ $s['priceNote'] ?? '' }}">
                             {{ $s['product'] }} ({{ rtrim(rtrim(number_format($s['remaining'], 4, '.', ''), '0'), '.') }} {{ $s['unit'] }} available)
                         </option>
                     @endforeach
@@ -198,7 +202,8 @@
             <div class="grid grid-cols-2 gap-3">
                 <div>
                     <label class="block text-xs font-semibold text-gray-600 mb-1">Price per unit (₱)</label>
-                    <input type="number" step="any" min="0" id="unitPrice" name="unitPrice" class="input-field" required oninput="recalcSale()">
+                    <input type="number" step="any" min="0" id="unitPrice" name="unitPrice" class="input-field" required oninput="recalcSale(); checkPriceRange()">
+                    <input type="hidden" name="suggestedPrice" id="suggestedPrice" value="">
                 </div>
                 <div>
                     <label class="block text-xs font-semibold text-gray-600 mb-1">Discount (%)</label>
@@ -206,6 +211,7 @@
                 </div>
             </div>
             <p id="priceHint" class="text-[11px] text-gray-400 -mt-1"></p>
+            <p id="rangeWarning" class="hidden text-[11px] -mt-1" style="color:var(--color-rust-600)"></p>
 
             <div class="rounded-xl p-3" style="background:var(--color-moss-100)">
                 <p class="text-xs text-gray-500">Price per unit after discount: <span id="finalUnit" class="figure">₱0.00</span></p>
@@ -265,15 +271,19 @@
         m.classList.remove('hidden'); m.classList.add('flex');
     }
 
-    function onStockChange() {
+    // The price book pre-fills the price; staff only change it when they need to.
+    function applyReferencePrice() {
         const opt = selectedStock();
         const hint = document.getElementById('priceHint');
-        document.getElementById('qtyUnit').textContent = opt ? '(' + opt.dataset.unit + ')' : '';
-        document.getElementById('saleQty').max = opt ? opt.dataset.remaining : '';
+        const wholesale = document.getElementById('saleType')?.value === 'wholesale';
+        const base = opt ? ((wholesale && opt.dataset.wholesale) ? opt.dataset.wholesale : opt.dataset.price) : '';
+        const suggested = document.getElementById('suggestedPrice');
+        if (suggested) suggested.value = base || '';
 
-        if (opt && opt.dataset.price !== '') {
-            document.getElementById('unitPrice').value = opt.dataset.price;
-            let text = 'Reference price ' + peso(opt.dataset.price) + ' per ' + opt.dataset.unit.replace(/s$/, '');
+        if (base) {
+            document.getElementById('unitPrice').value = base;
+            let text = ((wholesale && opt.dataset.wholesale) ? 'Wholesale' : 'Retail') + ' reference ' + peso(base) + ' per ' + opt.dataset.unit.replace(/s$/, '');
+            if (opt.dataset.note) text += ' — ' + opt.dataset.note;
             if (opt.dataset.priceOn) {
                 const days = Math.floor((Date.now() - new Date(opt.dataset.priceOn).getTime()) / 86400000);
                 text += ', set ' + opt.dataset.priceOn + (days > 14 ? ' (more than 2 weeks old, please check it)' : '');
@@ -281,9 +291,17 @@
             hint.textContent = text + '. You can change it.';
         } else {
             document.getElementById('unitPrice').value = '';
-            hint.textContent = opt ? 'No reference price yet for this product. Type the price (you can save one under Harvest, Price Reference).' : '';
+            hint.textContent = opt ? 'No reference price yet for this product. Save one under Harvest, Price Reference, and it will pre-fill next time.' : '';
         }
+        checkPriceRange();
         recalcSale();
+    }
+
+    function onStockChange() {
+        const opt = selectedStock();
+        document.getElementById('qtyUnit').textContent = opt ? '(' + opt.dataset.unit + ')' : '';
+        document.getElementById('saleQty').max = opt ? opt.dataset.remaining : '';
+        applyReferencePrice();
     }
 
     function onSaleTypeChange() {
@@ -291,7 +309,28 @@
         document.getElementById('customerWrap').classList.toggle('hidden', wholesale);
         document.getElementById('customerDiscount').checked = false;
         document.getElementById('discountPercent').value = wholesale ? WHOLESALE_DISCOUNT : 0;
-        recalcSale();
+        applyReferencePrice();
+    }
+
+    // Warns, but never blocks: a low price may be a real discount or spoilage.
+    function checkPriceRange() {
+        const opt = selectedStock();
+        const warn = document.getElementById('rangeWarning');
+        if (!warn) return;
+        const price = parseFloat(document.getElementById('unitPrice')?.value);
+        const floor = opt && opt.dataset.floor !== '' ? parseFloat(opt.dataset.floor) : null;
+        const ceiling = opt && opt.dataset.ceiling !== '' ? parseFloat(opt.dataset.ceiling) : null;
+
+        let msg = '';
+        if (!isNaN(price) && price > 0) {
+            if (floor !== null && price < floor) {
+                msg = 'Below your usual range (' + peso(floor) + ' – ' + peso(ceiling ?? floor) + '). Check the price before saving.';
+            } else if (ceiling !== null && price > ceiling) {
+                msg = 'Above your usual range (' + peso(floor ?? 0) + ' – ' + peso(ceiling) + '). Check the price before saving.';
+            }
+        }
+        warn.textContent = msg;
+        warn.classList.toggle('hidden', msg === '');
     }
 
     function onCustomerChange() {

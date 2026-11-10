@@ -391,16 +391,48 @@ class InventoryController extends Controller
 
     public function archive(string $id)
     {
-        $this->firestore->collection('inventory_items')->document($id)->set([
+        $docRef = $this->firestore->collection('inventory_items')->document($id);
+        $snapshot = $docRef->snapshot();
+        $itemName = $snapshot->exists() ? trim((string) ($snapshot->data()['name'] ?? '')) : '';
+
+        $docRef->set([
             'status' => 'archived',
             'archivedAt' => Carbon::now('Asia/Manila')
         ], ['merge' => true]);
 
+        // Its pending low-stock alerts go with it — an archived item must not
+        // keep nagging the notification bell.
+        $this->clearLowStockNotifications($id, $itemName);
+
         Cache::forget('inventory_list');
         Cache::forget('inventory_archived_list');
         Cache::forget('dashboard_stats');
+        Cache::forget('archived_inventory_alert_keys');
 
         return redirect()->route('inventory.index')->with('success', 'Item archived');
+    }
+
+    /**
+     * Delete every pending low-stock alert for one item, so archiving also
+     * clears the alerts it already raised (matched by itemId, or by name for
+     * alerts written before itemId was stored).
+     */
+    protected function clearLowStockNotifications(string $itemId, string $itemName = ''): void
+    {
+        $notifications = $this->firestore->collection('notifications')
+            ->where('type', '==', 'low_stock')
+            ->documents();
+
+        foreach ($notifications as $doc) {
+            $data = $doc->data();
+            $matchesItem = ($data['itemId'] ?? null) === $itemId;
+            $matchesName = $itemName !== ''
+                && str_starts_with((string) ($data['message'] ?? ''), $itemName . ' is low');
+
+            if ($matchesItem || $matchesName) {
+                $this->firestore->collection('notifications')->document($doc->id())->delete();
+            }
+        }
     }
 
     public function restore(string $id)
@@ -413,6 +445,7 @@ class InventoryController extends Controller
         Cache::forget('inventory_list');
         Cache::forget('inventory_archived_list');
         Cache::forget('dashboard_stats');
+        Cache::forget('archived_inventory_alert_keys');
 
         return redirect()->route('inventory.archived')->with('success', 'Item restored');
     }
@@ -486,6 +519,13 @@ class InventoryController extends Controller
 
         foreach ($items as $doc) {
             $item = $doc->data();
+
+            // Archived items are out of the ledger: they must never be consumed
+            // again, and they must never raise a low-stock alert.
+            if (($item['status'] ?? 'active') === 'archived') {
+                continue;
+            }
+
             $docRef = $this->firestore->collection('inventory_items')->document($doc->id());
 
             // Figure out how many days actually passed since the last deduction.
@@ -585,6 +625,8 @@ class InventoryController extends Controller
                     'userId' => 'all',
                     'title' => 'Low Stock Alert',
                     'message' => "{$item['name']} is low ({$newStock} {$item['unit']} left)",
+                    'itemId' => $doc->id(),
+                    'itemName' => $item['name'],
                     'read' => false,
                     'createdAt' => $now,
                     'type' => 'low_stock'

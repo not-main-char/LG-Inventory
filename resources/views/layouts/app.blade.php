@@ -7,6 +7,30 @@
 
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 
+    <style>
+        /* Sidebar toggle icon: the burger morphs into a collapse arrow whenever the
+           rail is open (pinned, or expanded by hover). Visual only — the click
+           behaviour is unchanged. */
+        #sidebarToggle .burger-swap { position: relative; display: block; width: 20px; height: 20px; }
+        #sidebarToggle .burger-swap svg {
+            position: absolute;
+            inset: 0;
+            width: 20px;
+            height: 20px;
+            transition: transform .28s cubic-bezier(.34, 1.3, .64, 1), opacity .18s ease;
+        }
+        #sidebarToggle .sw-arrow { opacity: 0; transform: rotate(-90deg) scale(.6); }
+        #sidebarToggle:hover .sw-burger { transform: scale(1.08); }
+        .sidebar-pinned #sidebarToggle .sw-burger,
+        .sidebar-collapsed:hover #sidebarToggle .sw-burger { opacity: 0; transform: rotate(90deg) scale(.6); }
+        .sidebar-pinned #sidebarToggle .sw-arrow,
+        .sidebar-collapsed:hover #sidebarToggle .sw-arrow { opacity: 1; transform: rotate(0deg) scale(1); }
+
+        @media (prefers-reduced-motion: reduce) {
+            #sidebarToggle .burger-swap svg { transition: none; }
+        }
+    </style>
+
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
@@ -23,8 +47,11 @@
 
             <aside id="sidebar" class="sidebar sidebar-collapsed text-white flex flex-col flex-shrink-0 shadow-2xl relative z-30">
                 <div class="p-4 flex items-center justify-center border-b border-white/10">
-                    <button id="sidebarToggle" class="p-1.5 rounded-lg hover:bg-white/10 transition" title="Toggle sidebar">
-                        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+                    <button id="sidebarToggle" class="p-1.5 rounded-lg hover:bg-white/10 transition" title="Pin sidebar open" aria-label="Toggle sidebar" aria-controls="sidebar" aria-expanded="false">
+                        <span class="burger-swap" aria-hidden="true">
+                            <svg class="sw-burger" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+                            <svg class="sw-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 6l-6 6 6 6"/><path d="M19 5v14"/></svg>
+                        </span>
                     </button>
                 </div>
 
@@ -47,6 +74,11 @@
                     <a href="{{ route('sensor-history.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('sensor-history*') ? 'active' : '' }}">
                         <svg class="nav-ic w-[18px] h-[18px] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
                         <span class="text-sm font-medium sidebar-label whitespace-nowrap">Sensor History</span>
+                    </a>
+
+                    <a href="{{ route('fishpond.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('fish-monitoring*') ? 'active' : '' }}">
+                        <svg class="nav-ic w-[18px] h-[18px] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12c3.5-4.5 8-6 12-6 2.4 0 4.4 1 6 2.8L22 6v12l-2-2.8C18.4 17 16.4 18 14 18c-4 0-8.5-1.5-12-6z"/><circle cx="8" cy="10.5" r="1.1"/></svg>
+                        <span class="text-sm font-medium sidebar-label whitespace-nowrap">Fish Monitoring</span>
                     </a>
 
                     <a href="{{ route('reports.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('reports*') ? 'active' : '' }}">
@@ -250,11 +282,17 @@
                 sidebarEl.classList.add('sidebar-pinned');
             }
 
+            // Keep the toggle's label/state in step with the icon animation.
+            sidebarToggleBtn.setAttribute('aria-expanded', pinned ? 'true' : 'false');
+            sidebarToggleBtn.title = pinned ? 'Collapse sidebar' : 'Pin sidebar open';
+
             sidebarToggleBtn.addEventListener('click', () => {
                 const nowPinned = !sidebarEl.classList.contains('sidebar-pinned');
                 sidebarEl.classList.toggle('sidebar-pinned', nowPinned);
                 sidebarEl.classList.toggle('sidebar-collapsed', !nowPinned);
                 localStorage.setItem('lg_sidebar_pinned', nowPinned ? 'true' : 'false');
+                sidebarToggleBtn.setAttribute('aria-expanded', nowPinned ? 'true' : 'false');
+                sidebarToggleBtn.title = nowPinned ? 'Collapse sidebar' : 'Pin sidebar open';
             });
         }
     </script>

@@ -50,6 +50,7 @@ class IncomeController extends Controller
     public function index(Request $request, HarvestStock $harvestStock)
     {
         $role = $request->attributes->get('firebase_role');
+
         $availableStock = $harvestStock->availableProducts();
 
         //Cache transaction data locally
@@ -161,6 +162,7 @@ class IncomeController extends Controller
             'quantitySold'    => 'required|numeric|min:0.01',
             'saleType'        => 'required|in:wholesale,retail',
             'unitPrice'       => 'required|numeric|min:0',
+            'suggestedPrice'  => 'nullable|numeric|min:0',
             'discountPercent' => 'required|numeric|min:0|max:100',
             'date'            => 'required|date',
             'notes'           => 'nullable|string|max:500',
@@ -259,6 +261,7 @@ class IncomeController extends Controller
                     // Harvest-based sale details.
                     'saleType'        => $v['saleType'],
                     'unitPrice'       => $unitPrice,
+                    'suggestedPrice'  => isset($v['suggestedPrice']) ? round((float) $v['suggestedPrice'], 2) : null,
                     'discountPercent' => $discount,
                     'finalUnitPrice'  => $finalUnitPrice,
                     'allocations'     => $allocations,

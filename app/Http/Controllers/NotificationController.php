@@ -56,6 +56,11 @@ class NotificationController extends Controller
             $data = [];
             foreach ($notifList as $item) {
                 $n = $item['data'];
+
+                // A low-stock alert for an archived item is stale — hide it.
+                if ($this->isLowStockForArchivedItem($n, $this->archivedAlertKeys())) {
+                    continue;
+                }
                 
                 if ($role !== 'admin' && isset($n['deletedByAdmin']) && $n['deletedByAdmin'] === true) {
                     continue;
@@ -124,6 +129,55 @@ class NotificationController extends Controller
     }
 
     
+    /**
+     * Item ids and names of archived inventory items. A low-stock alert for one
+     * of these must never reach the notification bell.
+     */
+    protected function archivedAlertKeys(): array
+    {
+        return Cache::remember('archived_inventory_alert_keys', 60, function () {
+            $keys = ['ids' => [], 'names' => []];
+
+            $archived = $this->firestore->collection('inventory_items')
+                ->where('status', '==', 'archived')
+                ->documents();
+
+            foreach ($archived as $doc) {
+                $keys['ids'][$doc->id()] = true;
+
+                $name = trim((string) ($doc->data()['name'] ?? ''));
+                if ($name !== '') {
+                    $keys['names'][] = $name;
+                }
+            }
+
+            return $keys;
+        });
+    }
+
+    /** Whether this notification is a low-stock alert for an archived item. */
+    protected function isLowStockForArchivedItem(array $notification, array $archived): bool
+    {
+        if (($notification['type'] ?? '') !== 'low_stock') {
+            return false;
+        }
+
+        $itemId = $notification['itemId'] ?? null;
+        if ($itemId !== null) {
+            return isset($archived['ids'][$itemId]);
+        }
+
+        // Alerts written before itemId was stored only carry the item name.
+        $message = (string) ($notification['message'] ?? '');
+        foreach ($archived['names'] as $name) {
+            if (str_starts_with($message, $name . ' is low')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function markRead($id, Request $request)
     {
         $this->firestore->collection('notifications')->document($id)->set(['read' => true], ['merge' => true]);

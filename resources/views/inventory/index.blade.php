@@ -155,7 +155,6 @@
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Category</label>
                 <select id="itemType" name="type" class="input-field">
-                    <option value="fish">Fish</option>
                     <option value="seed">Seed</option>
                     <option value="supplies">Supplies</option>
                 </select>
@@ -203,7 +202,7 @@
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Usage Frequency</label>
                 <select id="usageFrequency" name="usageFrequency" class="input-field" required onchange="toggleFrequencyFields()">
-                    <option value="daily">Daily — consumed every day </option>
+                    <option value="daily">Auto</option>
                     <option value="manual">Manual — self deductioin</option>
                 </select>
                 <p class="text-[11px] text-gray-400 mt-1">Low-stock alerts, Daily items alert when fewer than 7 days of stock remain; Seasonal items alert when stock can't cover the next cycle.</p>
