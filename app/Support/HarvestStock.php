@@ -133,6 +133,7 @@ class HarvestStock
                 'note'           => $ref['priceNote'],
                 'updatedOn'      => $ref['priceUpdatedOn'] ?? '',
                 'estimated'      => $ref['priceEstimated'],
+                'own'            => !empty($ref['priceOwnSource']),
                 'saved'          => false,
             ];
         }
@@ -174,6 +175,37 @@ class HarvestStock
     }
 
     /**
+     * "PRODUCT|unit" => the price a sale would start from, for products that
+     * have not been harvested yet. Used by the Add Harvest form to show the
+     * price while the harvest is still being entered.
+     */
+    public function priceHints(array $products, ?array $prices = null, array $units = ['kilos', 'pcs']): array
+    {
+        $prices ??= $this->priceReferences();
+
+        $out = [];
+        foreach ($products as $product) {
+            $product = strtoupper(trim((string) $product));
+            if ($product === '') {
+                continue;
+            }
+            foreach ($units as $unit) {
+                $ref = $this->referenceFor($product, $unit, $prices);
+                if ($ref['price'] === null) {
+                    continue;
+                }
+                $out[$product . '|' . $unit] = [
+                    'price'     => $ref['price'],
+                    'on'        => $ref['priceUpdatedOn'] ?? '',
+                    'estimated' => (bool) $ref['priceEstimated'],
+                ];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * Where the price for this product starts from.
      *
      * A price saved on the Harvest page always wins. Otherwise the price book
@@ -191,6 +223,7 @@ class HarvestStock
             'priceNote'      => '',
             'priceUpdatedOn' => null,
             'priceEstimated' => false,
+            'priceOwnSource' => false,
         ];
 
         $saved = $prices[self::priceId($product, $unit)] ?? null;
@@ -204,6 +237,7 @@ class HarvestStock
                 'priceNote'      => $saved['note'],
                 'priceUpdatedOn' => $saved['updatedOn'],
                 'priceEstimated' => false,
+                'priceOwnSource' => false,
             ];
         }
 
@@ -221,6 +255,7 @@ class HarvestStock
             'priceNote'      => $ref['note'],
             'priceUpdatedOn' => $ref['updatedOn'],
             'priceEstimated' => !empty($ref['estimated']),
+            'priceOwnSource' => !empty($ref['ownSource']),
         ];
     }
 }

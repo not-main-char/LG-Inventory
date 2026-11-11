@@ -2,8 +2,8 @@
 
 namespace App\Http\Controllers;
 
-use App\Support\DeviceHarvests;
 use App\Support\HarvestStock;
+use App\Support\PriceBook;
 use Carbon\Carbon;
 use Google\Cloud\Firestore\Transaction;
 use Illuminate\Http\Request;
@@ -19,7 +19,7 @@ class HarvestController extends Controller
         $this->firestore = $firestore->database();
     }
 
-    public function index(Request $request, HarvestStock $stock, DeviceHarvests $deviceHarvests)
+    public function index(Request $request, HarvestStock $stock)
     {
         $role = $request->attributes->get('firebase_role');
 
@@ -55,29 +55,17 @@ class HarvestController extends Controller
 
         $seedItems = $this->seedItems();
 
-        // Harvests the devices recorded in planting_events. Only "harvested"
-        // events are kept; anything still planted is not a harvest yet. They
-        // are not records on their own: the Add Harvest form offers them as a
-        // starting point, and the person saving the harvest confirms it.
-        $deviceData  = $deviceHarvests->harvests();
-        $deviceRows  = $deviceData['rows'];
-        $deviceError = $deviceData['error'];
-
-        // An event that already became a harvest record is not offered again.
-        $recordedEvents = [];
-        foreach ($harvests as $h) {
-            if (!empty($h['deviceId']) && !empty($h['deviceEventKey'])) {
-                $recordedEvents[DeviceHarvests::importId($h['deviceId'], $h['deviceEventKey'])] = true;
-            }
-        }
-        foreach ($deviceRows as &$deviceRow) {
-            $deviceRow['recorded'] = isset($recordedEvents[$deviceRow['stockId']]);
-        }
-        unset($deviceRow);
+        // What a sale would start from, so the Add Harvest form can show the
+        // price as soon as the crop and unit are chosen instead of leaving the
+        // price invisible until someone opens the Sales page.
+        $priceHints = $stock->priceHints(
+            array_merge(array_column($seedItems, 'name'), array_keys(PriceBook::OWN_PRICES)),
+            $prices
+        );
 
         return view('harvest.index', compact(
-            'role', 'available', 'harvestRows', 'batches', 'disposals', 'prices', 'priceList', 'seedItems',
-            'deviceRows', 'deviceError'
+            'role', 'available', 'harvestRows', 'batches', 'disposals', 'priceList', 'seedItems',
+            'priceHints'
         ));
     }
 
@@ -120,8 +108,6 @@ class HarvestController extends Controller
             'unit'        => 'required|in:kilos,pcs',
             'harvestDate' => 'required|date',
             'notes'       => 'nullable|string|max:255',
-            'deviceId'       => 'nullable|string|max:80',
-            'deviceEventKey' => 'nullable|string|max:120',
         ]);
 
         // Aquaculture is always fish and landfarming is always plant;
@@ -148,29 +134,6 @@ class HarvestController extends Controller
             'createdBy'         => $request->attributes->get('firebase_user'),
             'createdAt'         => Carbon::now('Asia/Manila'),
         ];
-
-        // Started from a device event: the device's own book is left untouched.
-        // The record gets the event's fixed id, so the same harvesting cannot be
-        // recorded twice.
-        if (!empty($v['deviceId']) && !empty($v['deviceEventKey'])) {
-            $record['deviceId']       = $v['deviceId'];
-            $record['deviceEventKey'] = $v['deviceEventKey'];
-
-            $ref = $this->firestore->collection('harvests')
-                ->document(DeviceHarvests::importId($v['deviceId'], $v['deviceEventKey']));
-
-            try {
-                $ref->create($record);
-            } catch (\Throwable $e) {
-                if ($ref->snapshot()->exists()) {
-                    return back()->withErrors(['error' => 'That device harvest was already recorded once. If this is a new harvest, add it without picking a device.'])->withInput();
-                }
-
-                return $this->fail($e);
-            }
-
-            return redirect()->to(route('harvest.index') . '#records')->with('success', 'Harvest recorded from the device');
-        }
 
         $this->firestore->collection('harvests')->newDocument()->set($record);
 

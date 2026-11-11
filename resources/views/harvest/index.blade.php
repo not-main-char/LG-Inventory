@@ -69,9 +69,6 @@
                 <tr class="border-b border-[#F1ECDC]">
                     <td class="p-3 align-middle text-sm text-gray-600 whitespace-nowrap">
                         {{ \Carbon\Carbon::parse($h['harvestDate'])->format('M d, Y') }}
-                        @if(!empty($h['deviceEventKey']))
-                            <div class="text-[11px] text-gray-400">from device {{ $h['deviceId'] }}</div>
-                        @endif
                     </td>
                     <td class="p-3 align-middle">
                         <div class="flex items-center gap-2">
@@ -181,7 +178,7 @@
             </thead>
             <tbody>
                 @foreach($priceList as $p)
-                @php $stale = $p['updatedOn'] !== '' && \Carbon\Carbon::parse($p['updatedOn'])->diffInDays(now('Asia/Manila')) > 14; @endphp
+                @php $stale = empty($p['own']) && $p['updatedOn'] !== '' && \Carbon\Carbon::parse($p['updatedOn'])->diffInDays(now('Asia/Manila')) > 14; @endphp
                 <tr class="border-b border-[#F1ECDC]">
                     <td class="p-3 align-middle text-sm font-medium text-gray-800">{{ $p['product'] }}</td>
                     <td class="p-3 align-middle text-sm text-gray-600">
@@ -236,17 +233,6 @@
             <input type="hidden" name="product" id="hProduct">
             <input type="hidden" name="seedItemId" id="hSeedItemId">
             <input type="hidden" name="kind" id="hKind">
-            <input type="hidden" name="deviceId" id="hDeviceId">
-            <input type="hidden" name="deviceEventKey" id="hDeviceKey">
-
-            <div>
-                <label class="block text-xs font-semibold text-gray-600 mb-1">Start from a device harvest (optional)</label>
-                <select id="hDevicePick" class="input-field" onchange="applyDeviceHarvest()"></select>
-                <p class="text-[11px] text-gray-400 mt-1">Read from the devices' planting_events. Picking one fills in the amount, product and date — you still save the harvest yourself.</p>
-                @if($deviceError)
-                    <p class="text-[11px] mt-1" style="color:var(--color-rust-600)">{{ $deviceError }}</p>
-                @endif
-            </div>
 
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Source</label>
@@ -268,8 +254,9 @@
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Product</label>
                 <select id="hProductSelect" class="input-field" onchange="renderHarvestProduct()"></select>
-                <input type="text" id="hProductText" class="input-field uppercase mt-1.5" placeholder="Type the name, e.g. TILAPIA" oninput="this.value = this.value.toUpperCase()">
+                <input type="text" id="hProductText" class="input-field uppercase mt-1.5" placeholder="Type the name, e.g. TILAPIA" oninput="this.value = this.value.toUpperCase(); updatePriceHint()">
                 <p id="hProductHint" class="text-[11px] text-gray-400 mt-1"></p>
+                <p id="hPriceHint" class="text-xs mt-1" style="color:var(--color-forest-700)"></p>
             </div>
 
             <div class="grid grid-cols-2 gap-3">
@@ -279,7 +266,7 @@
                 </div>
                 <div>
                     <label class="block text-xs font-semibold text-gray-600 mb-1">Unit</label>
-                    <select name="unit" class="input-field" required>
+                    <select name="unit" id="hUnit" class="input-field" required onchange="updatePriceHint()">
                         <option value="kilos">Kilos</option>
                         <option value="pcs">Pcs</option>
                     </select>
@@ -414,7 +401,7 @@
 @push('scripts')
 <script>
     const seedItems = @json($seedItems);
-    const deviceRows = @json($deviceRows);
+    const priceHints = @json($priceHints);
 
     function localToday() {
         const d = new Date();
@@ -458,75 +445,45 @@
 
     activateTab(location.hash.replace('#', ''));
 
-    // ---- Device harvests: a starting point for a harvest record ----
-    function renderDevicePicker() {
-        const sel = document.getElementById('hDevicePick');
-        if (!sel) return;
+    // ---- Add Harvest ----
 
-        sel.innerHTML = '';
-        const none = document.createElement('option');
-        none.value = '';
-        none.textContent = '— Not from a device —';
-        sel.appendChild(none);
+    // The price a sale would start from for the chosen crop and unit, so it can
+    // be seen while the harvest is being recorded.
+    function updatePriceHint() {
+        const hint = document.getElementById('hPriceHint');
+        if (!hint) return;
 
-        if (!deviceRows.length) {
-            const empty = document.createElement('option');
-            empty.value = '';
-            empty.disabled = true;
-            empty.textContent = 'No harvested events on the devices yet';
-            sel.appendChild(empty);
+        const kind = currentKind();
+        const select = document.getElementById('hProductSelect');
+        const text = document.getElementById('hProductText');
+        const unit = document.getElementById('hUnit').value;
+
+        let product = '';
+        if (kind === 'plant' && select.value && select.value !== '__other') {
+            const item = seedItems.find(s => s.id === select.value);
+            product = item ? item.name : '';
+        } else {
+            product = text.value.trim().toUpperCase();
+        }
+
+        const ref = product ? priceHints[product + '|' + unit] : null;
+        const word = unit === 'pcs' ? 'pc' : 'kg';
+
+        if (!ref) {
+            hint.textContent = product
+                ? 'No price reference yet for this crop — set one in Price Reference and sales will start from it.'
+                : '';
             return;
         }
 
-        deviceRows.forEach((r, i) => {
-            const opt = document.createElement('option');
-            opt.value = String(i);
-            opt.disabled = !!r.recorded;
-            const qty = r.harvested ? ' · ' + r.harvested + ' pcs' : '';
-            opt.textContent = r.dateLabel + ' · ' + r.product + qty + ' · ' + r.deviceId
-                + (r.recorded ? ' (already recorded)' : '');
-            sel.appendChild(opt);
-        });
+        // A national average is dated by year, not by day.
+        const on = ref.on
+            ? (String(ref.on).match(/^(\d{4})-\d{2}-\d{2}$/) ? ' (' + String(ref.on).slice(0, 4) + ')' : ' (' + ref.on + ')')
+            : '';
+        hint.textContent = (ref.estimated ? 'Estimated' : 'Reference')
+            + ' price ₱' + Number(ref.price).toFixed(2) + ' per ' + word + on
+            + ' — the Sales page starts from this.';
     }
-
-    function applyDeviceHarvest() {
-        const sel = document.getElementById('hDevicePick');
-        const idField = document.getElementById('hDeviceId');
-        const keyField = document.getElementById('hDeviceKey');
-
-        idField.value = '';
-        keyField.value = '';
-
-        if (sel.value === '') return;
-        const r = deviceRows[Number(sel.value)];
-        if (!r) return;
-
-        document.getElementById('hSource').value = 'hydroponics';
-        onHarvestSourceChange();
-
-        const select = document.getElementById('hProductSelect');
-        const text = document.getElementById('hProductText');
-        const match = seedItems.find(s => s.name === r.product);
-        if (match) {
-            select.value = match.id;
-            text.value = '';
-        } else {
-            select.value = '__other';
-            text.value = r.product || '';
-        }
-        renderHarvestProduct();
-
-        const form = document.getElementById('harvestForm');
-        form.querySelector('[name="unit"]').value = 'pcs';
-        form.querySelector('[name="quantity"]').value = r.harvested || '';
-        form.querySelector('[name="notes"]').value = r.notes || r.description || '';
-        document.getElementById('hDate').value = r.harvestDate || localToday();
-
-        idField.value = r.deviceId;
-        keyField.value = r.eventKey;
-    }
-
-    // ---- Add Harvest ----
     function currentKind() {
         const source = document.getElementById('hSource').value;
         if (source === 'aquaculture') return 'fish';
@@ -537,7 +494,6 @@
     function openHarvestModal() {
         document.getElementById('harvestForm').reset();
         document.getElementById('hDate').value = localToday();
-        renderDevicePicker();
         onHarvestSourceChange();
         showModal('harvestModal');
     }
@@ -570,6 +526,8 @@
             text.classList.remove('hidden');
             hint.textContent = 'Type the fish name, for example TILAPIA.';
         }
+
+        updatePriceHint();
     }
 
     function prepareHarvest() {
@@ -619,6 +577,5 @@
         showModal('priceModal');
     }
 
-    renderDevicePicker();
 </script>
 @endpush

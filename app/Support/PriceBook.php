@@ -14,9 +14,10 @@ use Kreait\Firebase\Contract\Firestore;
  * default for this farm, so a sale never starts from an empty price box. A
  * price the team saved on the Harvest page always wins over the feed.
  *
- * Crops the DA does not list anywhere (ube, for one) still get a price: the
- * average of the closest class of crops in the same Region I list. Those are
- * marked as estimates so nobody mistakes them for an official figure.
+ * Crops the DA does not list anywhere (ube, for one) are first looked up in
+ * OWN_PRICES, which holds their own published figure and its source. Only when
+ * a crop has neither a DA row nor an own price does the class average step in,
+ * and that one is marked as an estimate.
  */
 class PriceBook
 {
@@ -28,6 +29,21 @@ class PriceBook
     /** Where the last imported price list is kept. */
     public const COLLECTION = 'price_sources';
     public const DOCUMENT   = 'region1';
+
+    /**
+     * Crops the Region I list does not carry, with their own published price.
+     * These beat the class estimate and lose to a price saved on the Harvest
+     * page. Keep the source and the period, because the note shows both.
+     */
+    public const OWN_PRICES = [
+        'UBE' => [
+            'perKg'  => 80.11,
+            'low'    => 80.00,
+            'high'   => 100.00,
+            'source' => 'PSA national retail average for ube (2025)',
+            'asOf'   => '2025-12-31',
+        ],
+    ];
 
     /** The commodity select values used by bantaypresyo.da.gov.ph. */
     public const CATEGORIES = [
@@ -73,6 +89,18 @@ class PriceBook
         'fish_fresh'  => ['Tilapia', 'Bangus (Medium)'],
         'fish_marine' => ['Galunggong(Local)', 'Sardines (Tamban)', 'Yellow-Fin Tuna (Tambakol)'],
         'meat'        => ['Whole Chicken'],
+    ];
+
+    /** Plain words for a class, used when an estimate has to name it. */
+    protected const CLASS_LABELS = [
+        'rootcrop'    => 'rootcrops',
+        'leafy'       => 'leafy vegetables',
+        'fruit_veg'   => 'vegetables',
+        'fruit'       => 'fruits',
+        'spice'       => 'spices',
+        'fish_fresh'  => 'fresh fish',
+        'fish_marine' => 'fish',
+        'meat'        => 'meat',
     ];
 
     /** Pieces per kilo assumed when a crop is sold by piece and the DA spec does not say. */
@@ -227,10 +255,48 @@ class PriceBook
         }
 
         $matches = $this->matches($product, $book['items']);
+        if ($matches) {
+            return $this->fromListed($product, $unit, $matches, $book);
+        }
 
-        return $matches
-            ? $this->fromListed($product, $unit, $matches, $book)
-            : $this->estimate($product, $unit, $book);
+        // Not on the DA list: use the crop's own published figure when we have
+        // one, because a rootcrop average is not a ube price.
+        $own = $this->ownPrice($product);
+        if ($own) {
+            return $this->fromOwn($product, $unit, $own);
+        }
+
+        return $this->estimate($product, $unit, $book);
+    }
+
+    /** A crop's own published price, matched by name. */
+    protected function ownPrice(string $product): ?array
+    {
+        $needle = $this->normalise($product);
+        if ($needle === '') {
+            return null;
+        }
+
+        foreach (self::OWN_PRICES as $name => $row) {
+            if ($this->normalise($name) === $needle) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+
+    /** Price built from a crop's own figure instead of a class average. */
+    protected function fromOwn(string $product, string $unit, array $own): ?array
+    {
+        return $this->build($product, $unit, (float) $own['perKg'], [
+            'low'    => $own['low'] ?? null,
+            'high'   => $own['high'] ?? null,
+            'pieces' => null,
+            'asOf'   => $own['asOf'] ?? null,
+            'own'    => true,
+            'basis'  => 'Price from the ' . $own['source'] . '.',
+        ]);
     }
 
     /** Region I rows whose commodity name lines up with this product. */
@@ -267,15 +333,13 @@ class PriceBook
         }
 
         $specs = $this->average(array_column($matches, 'piecesPerKg'));
-        $names = implode(' / ', array_slice(array_unique(array_column($matches, 'name')), 0, 3));
-        $spec  = trim(implode(' / ', array_slice(array_unique(array_filter(array_column($matches, 'spec'))), 0, 2)));
 
         return $this->build($product, $unit, $perKg, [
             'low'    => $this->min(array_column($matches, 'low')),
             'high'   => $this->max(array_column($matches, 'high')),
             'pieces' => $specs,
             'asOf'   => $book['asOf'] ?? null,
-            'basis'  => self::SOURCE . ' ' . self::REGION_NAME . ' — ' . $names . ($spec !== '' ? ' (' . $spec . ')' : '') . ' ₱' . number_format($perKg, 2) . '/kg',
+            'basis'  => 'This price is from the ' . self::SOURCE . ' ' . self::REGION_NAME . ' list.',
         ]);
     }
 
@@ -304,11 +368,12 @@ class PriceBook
             return null;
         }
 
+        // Name the crops it leaned on, so the note answers "where is this from".
         $anchored = implode(', ', array_map(
-            fn ($row) => $row['name'] . ' ₱' . number_format($row['perKg'], 2) . '/kg',
-            array_slice($rows, 0, 3)
+            fn ($row) => $row['name'],
+            array_slice($rows, 0, 2)
         ));
-        $detail = $anchored !== '' ? ' (based on ' . $anchored . ')' : '';
+        $label = self::CLASS_LABELS[$class] ?? 'similar crops';
 
         return $this->build($product, $unit, $perKg, [
             'low'       => null,
@@ -316,8 +381,9 @@ class PriceBook
             'pieces'    => null,
             'asOf'      => $book['asOf'] ?? null,
             'estimated' => true,
-            'basis'     => 'Estimate — ' . strtoupper($product) . ' is not in the ' . self::SOURCE . ' ' . self::REGION_NAME
-                . ' list. Based on the ' . $class . ' average ₱' . number_format($perKg, 2) . '/kg' . $detail . '.',
+            'basis'     => 'Price reference is based on the ' . self::SOURCE . ' ' . self::REGION_NAME
+                . ' list for similar ' . $label . ($anchored !== '' ? ' (' . $anchored . ')' : '')
+                . '. ' . strtoupper($product) . ' is not on the list.',
         ]);
     }
 
@@ -347,16 +413,15 @@ class PriceBook
             return null;
         }
 
-        $note = $opt['basis'];
-        if ($pieceUnit) {
-            $word  = $this->pieceWord($unit);
-            $count = rtrim(rtrim(number_format($pieces, 2), '0'), '.');
-            $note .= ' ÷ ' . $count . ' ' . $word . '/kg = ₱' . number_format($price, 2) . ' per ' . $word
-                . ($assumed ? ' (pieces per kilo assumed — check this one).' : '.');
+        $note = rtrim(rtrim($opt['basis'], " ."), " .");
+        // A one-to-one unit needs no explanation; only real conversions do.
+        if ($pieceUnit && round((float) $pieces, 4) != 1.0) {
+            $note .= ', converted to per ' . $this->pieceWord($unit);
+            if ($assumed) {
+                $note .= ' — pieces per kilo assumed, check this one';
+            }
         }
-        if (!empty($opt['estimated'])) {
-            $note .= ' Save a price here to replace the estimate.';
-        }
+        $note .= '.';
 
         return [
             'price'          => $price,
@@ -367,6 +432,7 @@ class PriceBook
             'note'           => trim($note),
             'updatedOn'      => $opt['asOf'] ?? null,
             'estimated'      => !empty($opt['estimated']),
+            'ownSource'      => !empty($opt['own']),
         ];
     }
 
