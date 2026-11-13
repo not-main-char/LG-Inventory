@@ -45,8 +45,43 @@ class InventoryAlerts
      *  - Seasonal items: alert when stock can't cover at least 1 more full cycle/season.
      *  - Manual items: never auto-alert (no consumption rate to project from).
      */
+    /**
+     * Seeds get a harder alert than general low stock: a seed that cannot cover
+     * another planting cycle (or is already at zero) blocks the next harvest,
+     * so it is flagged as critical rather than merely low.
+     */
+    public static function isCritical(array $data): bool
+    {
+        $stock = (float) ($data['currentStock'] ?? 0);
+
+        // A minimum set on the item is the clearest rule: at or below it, act now.
+        if (isset($data['minStock']) && $data['minStock'] !== '' && $stock <= (float) $data['minStock'] + 0.00001) {
+            return true;
+        }
+
+        if (($data['type'] ?? '') !== 'seed') {
+            return false;
+        }
+
+        if ($stock <= 0.00001) {
+            return true;
+        }
+
+        $perCycle = (float) ($data['seedsPerCycle'] ?? 0);
+
+        return $perCycle > 0 && $stock < $perCycle;
+    }
+
     public static function isLow(array $data): bool
     {
+        // Twice the minimum is the warning band, so there is time to restock
+        // before the item becomes critical.
+        $minimum = $data['minStock'] ?? null;
+        if ($minimum !== null && $minimum !== '' && (float) $minimum > 0
+            && (float) ($data['currentStock'] ?? 0) <= (float) $minimum * 2) {
+            return true;
+        }
+
         $days = self::daysRemaining($data);
         if ($days !== null) {
             return $days < 7;

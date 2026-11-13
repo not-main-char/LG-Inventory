@@ -33,7 +33,7 @@
         <div class="flex gap-2">
             <button onclick="openItemModal()" class="btn-primary px-4 py-2.5 text-sm flex items-center gap-2">
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
-                Add New Item
+                Add New Stock
             </button>
             <button onclick="openManualDeductionModal()" class="btn-ghost px-4 py-2.5 text-sm flex items-center gap-2" style="border: 1px solid var(--color-rust-300); color: var(--color-rust-600)">
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5M12 19V5"/></svg>
@@ -54,7 +54,6 @@
             <tr>
                 <th class="p-3 text-left">Item</th>
                 <th class="p-3 text-left">Stock / Unit</th>
-                <th class="p-3 text-left">Procurement</th>
                 <th class="p-3 text-left">Date Stocked</th>
                 <th class="p-3 text-left">Consumption</th>
                 <th class="p-3 text-left">Days Remaining</th>
@@ -67,6 +66,7 @@
                 $data = $item->data();
                 $id = $item->id();
                 $isLow = \App\Support\InventoryAlerts::isLow($data);
+                $isCritical = \App\Support\InventoryAlerts::isCritical($data);
                 $daysLeft = \App\Support\InventoryAlerts::daysRemaining($data);
                 $cyclesLeft = \App\Support\InventoryAlerts::cyclesRemaining($data);
                 $stampClass = $data['type'] === 'fish' ? 'stamp-fish' : ($data['type'] === 'seed' ? 'stamp-seed' : 'stamp-supplies');
@@ -76,16 +76,15 @@
                     <div class="flex items-center gap-2.5">
                         <span class="stamp {{ $stampClass }}">{{ $data['type'] }}</span>
                         <span class="text-sm font-medium text-gray-800">{{ $data['name'] }}</span>
-                        @if($isLow)
+                        @if($isCritical)
+                            <span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded text-white" style="background:#7f1d1d" title="Cannot cover another planting cycle">Critical</span>
+                        @elseif($isLow)
                             <span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded text-white" style="background:var(--color-rust-600)">Low</span>
                         @endif
                     </div>
                 </td>
                 <td class="p-3 align-middle">
                     <span class="figure text-sm">{{ rtrim(rtrim(number_format((float)$data['currentStock'], 4, '.', ''), '0'), '.') }} {{ $data['unit'] }}</span>
-                </td>
-                <td class="p-3 align-middle text-sm text-gray-600">
-                    <div>{{ $data['procurementSource'] ?? 'Not specified' }}</div>
                 </td>
                 <td class="p-3 align-middle text-sm text-gray-600">
                     {{ isset($data['lastStockUpdate']) ? $data['lastStockUpdate']->toDateTime()->format('M d, Y') : 'N/A' }}
@@ -134,7 +133,7 @@
             </tr>
             @endforeach
             @if(count($items) === 0)
-            <tr><td colspan="7" class="p-8 text-center text-sm text-gray-400">No items recorded yet. Add the first item to start the ledger.</td></tr>
+            <tr><td colspan="6" class="p-8 text-center text-sm text-gray-400">No stock recorded yet. Add the first stock to start the ledger.</td></tr>
             @endif
         </tbody>
     </table>
@@ -144,7 +143,7 @@
 <!-- Add / Edit Item Modal  	Manual restock only -->
 <div id="itemModal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50 p-4 overflow-y-auto">
     <div class="modal-panel p-6 w-full max-w-md my-8">
-        <h2 class="font-display text-xl font-semibold mb-4" id="modalTitle" style="color:var(--color-ink-900)">Add Item</h2>
+        <h2 class="font-display text-xl font-semibold mb-4" id="modalTitle" style="color:var(--color-ink-900)">Add Stock</h2>
         <form id="itemForm" method="POST" action="{{ route('inventory.store') }}" class="space-y-3">
             @csrf
             <input type="hidden" id="itemId" name="id">
@@ -197,6 +196,12 @@
                         <input type="text" id="unitOther" name="unitOther" class="input-field uppercase" placeholder="Type the unit" oninput="this.value = this.value.toUpperCase()">
                     </div>
                 </div>
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Minimum Stock (optional)</label>
+                <input type="number" id="minStock" name="minStock" step="any" min="0" class="input-field" placeholder="e.g. 20">
+                <p class="text-[11px] text-gray-400 mt-1">At or below this number the item is <strong>Critical</strong>; at twice this number it is <strong>Low</strong>. Useful for seeds.</p>
             </div>
 
             <div>
@@ -334,6 +339,13 @@
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Quantity to Add</label>
                 <input type="number" step="any" name="quantity" class="input-field" required min="0.01">
             </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Where it came from</label>
+                <select name="procurementSource" class="input-field">
+                    <option value="Farm Purchase">Farm Purchase</option>
+                    <option value="DA">DA</option>
+                </select>
+            </div>
             <div class="pt-2 flex gap-2">
                 <button type="submit" class="btn-primary w-full py-2.5 text-sm">Add to Stock</button>
                 <button type="button" onclick="closeRestockModal()" class="btn-ghost w-full py-2.5 text-sm">Cancel</button>
@@ -345,7 +357,14 @@
 <!-- History Modal -->
 <div id="historyModal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50 p-4 overflow-y-auto">
     <div class="modal-panel p-6 w-full max-w-md my-8">
-        <h2 class="font-display text-xl font-semibold mb-4" id="historyTitle" style="color:var(--color-ink-900)">Stock History</h2>
+        <h2 class="font-display text-xl font-semibold mb-3" id="historyTitle" style="color:var(--color-ink-900)">Stock History</h2>
+        <div class="flex flex-wrap gap-1.5 mb-3" id="historyFilters">
+            <button type="button" data-hfilter="all" onclick="setHistoryFilter('all')" class="text-[11px] font-semibold px-2.5 py-1 rounded-full border" style="border-color:#DCD3B8">All</button>
+            <button type="button" data-hfilter="auto" onclick="setHistoryFilter('auto')" class="text-[11px] font-semibold px-2.5 py-1 rounded-full border" style="border-color:#DCD3B8">Auto</button>
+            <button type="button" data-hfilter="manual" onclick="setHistoryFilter('manual')" class="text-[11px] font-semibold px-2.5 py-1 rounded-full border" style="border-color:#DCD3B8">Manual</button>
+            <button type="button" data-hfilter="restock" onclick="setHistoryFilter('restock')" class="text-[11px] font-semibold px-2.5 py-1 rounded-full border" style="border-color:#DCD3B8">Restock</button>
+            <button type="button" data-hfilter="procurement" onclick="setHistoryFilter('procurement')" class="text-[11px] font-semibold px-2.5 py-1 rounded-full border" style="border-color:#DCD3B8">Procurement</button>
+        </div>
         <div id="historyList" class="space-y-2 max-h-96 overflow-y-auto"></div>
         <button type="button" onclick="closeHistoryModal()" class="btn-ghost w-full py-2.5 text-sm mt-4">Close</button>
     </div>
@@ -449,7 +468,7 @@
             return;
         }
         document.getElementById('itemForm').reset();
-        document.getElementById('modalTitle').innerText = 'Add Item';
+        document.getElementById('modalTitle').innerText = 'Add Stock';
         document.getElementById('itemForm').action = '{{ route('inventory.store') }}';
         const methodInput = document.querySelector('#itemForm input[name="_method"]');
         if (methodInput) methodInput.remove();
@@ -489,6 +508,7 @@
         document.getElementById('usageFrequency').value = item.usageFrequency || 'manual';
         setSelectValue('unitSelect', 'unitOtherWrap', 'unitOther', item.unit, ['pcs','sack','seeds']);
         document.getElementById('procurementSource').value = item.procurementSource || 'DA';
+        document.getElementById('minStock').value = item.minStock ?? '';
 
         if (item.unit === 'sack') {
             const weight = parseFloat(item.sackWeightKg) || 25;
@@ -627,40 +647,98 @@
         if (!isOther) customInput.value = '';
     }
 
-    async function deleteItem(id) {
-        if (confirm('Delete this item permanently?')) {
-            await fetch(`/inventory/${id}`, { method: 'DELETE', headers: { 'X-CSRF-TOKEN': '{{ csrf_token() }}' } })
-            location.reload();
+    // Each type tints the whole row so it can be read at a glance, with a
+    // matching tag for the exact wording.
+    const HISTORY_STYLES = {
+        auto:        { label: 'Auto',        color: '#1f4d6b', bg: '#e3eef5', row: '#eef5f9' },
+        manual:      { label: 'Manual',      color: '#8a5a1e', bg: '#fdf1dc', row: '#fdf7ea' },
+        restock:     { label: 'Restock',     color: '#2f5d3a', bg: '#e6f1e6', row: '#eff7f0' },
+        procurement: { label: 'Procurement', color: '#5b21b6', bg: '#efe9fb', row: '#f5f0fd' },
+        other:       { label: 'Other',       color: '#6b6350', bg: '#f0ece0', row: '#faf8f2' },
+    };
+
+    let historyEntries = [];
+    let historyFilter = 'all';
+
+    // Older entries were saved without a type, so read it from the action text.
+    function historyType(h) {
+        const type = String(h.type || '').toLowerCase();
+        if (HISTORY_STYLES[type]) return type;
+
+        const action = String(h.action || '').toLowerCase();
+        if (action.indexOf('auto') === 0) return 'auto';
+        if (action.indexOf('manual') === 0) return 'manual';
+        if (action.indexOf('restock') === 0) return 'restock';
+        if (action.indexOf('initial') === 0 || action.indexOf('new stock') === 0) return 'procurement';
+        return 'other';
+    }
+
+    function escHistory(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    function setHistoryFilter(filter) {
+        historyFilter = filter;
+        renderHistory();
+    }
+
+    function renderHistory() {
+        const list = document.getElementById('historyList');
+        if (!list) return;
+
+        document.querySelectorAll('#historyFilters [data-hfilter]').forEach(function (chip) {
+            const on = chip.dataset.hfilter === historyFilter;
+            chip.style.background = on ? 'var(--color-forest-700)' : 'transparent';
+            chip.style.color = on ? '#fff' : '#3f3a2e';
+        });
+
+        const rows = historyEntries.filter(function (h) {
+            return historyFilter === 'all' || historyType(h) === historyFilter;
+        });
+
+        if (!rows.length) {
+            list.innerHTML = '<p class="text-sm text-gray-400 py-6 text-center">'
+                + (historyEntries.length ? 'No ' + historyFilter + ' entries for this item.' : 'No stock movement recorded yet for this item.')
+                + '</p>';
+            return;
         }
+
+        list.innerHTML = rows.map(function (h) {
+            const style = HISTORY_STYLES[historyType(h)];
+            const notes = h.notes ? '<p class="text-[11px] text-gray-500 mt-1 italic">' + escHistory(h.notes) + '</p>' : '';
+            return '<div class="border-b border-[#F1ECDC] px-2 py-1.5 rounded-md mb-1" style="background:' + style.row + '">'
+                + '<div class="flex items-center justify-between gap-3">'
+                + '<div class="min-w-0">'
+                + '<div class="flex items-center gap-2">'
+                + '<span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded" style="color:' + style.color + ';background:' + style.bg + '">' + style.label + '</span>'
+                + '<p class="text-sm font-medium text-gray-700">' + escHistory(h.action || 'Stock update') + '</p>'
+                + '</div>'
+                + '<p class="text-xs text-gray-400 mt-0.5">' + escHistory(h.date || '') + '</p>'
+                + '</div>'
+                + '<span class="figure text-sm whitespace-nowrap">' + escHistory(h.quantity != null ? h.quantity : (h.amount || '')) + '</span>'
+                + '</div>'
+                + notes
+                + '</div>';
+        }).join('');
     }
 
     async function viewHistory(id, name) {
-        document.getElementById('historyTitle').innerText = `Stock History — ${name}`;
+        historyEntries = [];
+        historyFilter = 'all';
+        document.getElementById('historyTitle').innerText = 'Stock History — ' + name;
         document.getElementById('historyList').innerHTML = '<p class="text-sm text-gray-400">Loading…</p>';
         showModal('historyModal');
         try {
-            const res = await fetch(`/inventory/${id}/history`);
+            const res = await fetch('/inventory/' + id + '/history');
             const history = await res.json();
-            const list = document.getElementById('historyList');
-            if (!history || history.length === 0) {
-                list.innerHTML = '<p class="text-sm text-gray-400 py-6 text-center">No stock movement recorded yet for this item.</p>';
-                return;
-            }
-            list.innerHTML = history.map(h => `
-	                <div class="border-b border-[#F1ECDC] pb-2">
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <p class="text-sm font-medium text-gray-700">${h.action || h.type || 'Stock update'}</p>
-                                <p class="text-xs text-gray-400">${h.date || ''}</p>
-                            </div>
-                            <span class="figure text-sm">${h.quantity ?? h.amount ?? ''}</span>
-                        </div>
-                        ${h.notes ? `<p class="text-[11px] text-gray-500 mt-1 italic">Reason: ${h.notes}</p>` : ''}
-	                </div>
-            `).join('');
+            historyEntries = Array.isArray(history) ? history : [];
+            renderHistory();
         } catch (e) {
             document.getElementById('historyList').innerHTML = '<p class="text-sm text-rust-600 py-6 text-center">Could not load history.</p>';
         }
     }
+
 </script>
 @endpush

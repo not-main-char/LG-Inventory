@@ -37,7 +37,7 @@
 </head>
 <body class="antialiased">
 
-    @if(!Route::is('login') && !Route::is('setup-profile') && !Route::is('change-password'))
+    @if(!Route::is('login') && !Route::is('change-password'))
         @php
             $currentRole = session('firebase_role', request()->attributes->get('firebase_role', 'admin'));
             $roleLabels = ['admin' => 'CAC Manager', 'viewer' => 'Viewer'];
@@ -66,19 +66,29 @@
                         <span class="text-sm font-medium sidebar-label whitespace-nowrap">Inventory</span>
                     </a>
 
-                    <a href="{{ route('income.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('income*') ? 'active' : '' }}">
-                        <svg class="nav-ic w-[18px] h-[18px] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 16l4-4 3 3 5-6"/></svg>
-                        <span class="text-sm font-medium sidebar-label whitespace-nowrap">Income Ledger</span>
-                    </a>
-
-                    <a href="{{ route('sensor-history.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('sensor-history*') ? 'active' : '' }}">
-                        <svg class="nav-ic w-[18px] h-[18px] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
-                        <span class="text-sm font-medium sidebar-label whitespace-nowrap">Sensor History</span>
+                    <a href="{{ route('pond.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('pond-monitoring*') ? 'active' : '' }}">
+                        <svg class="nav-ic w-[18px] h-[18px] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7c2.5 0 2.5 2 5 2s2.5-2 5-2 2.5 2 5 2 2.5-2 3-2"/><path d="M3 12c2.5 0 2.5 2 5 2s2.5-2 5-2 2.5 2 5 2 2.5-2 3-2"/><path d="M3 17c2.5 0 2.5 2 5 2s2.5-2 5-2 2.5 2 5 2 2.5-2 3-2"/></svg>
+                        <span class="text-sm font-medium sidebar-label whitespace-nowrap">Pond Monitoring</span>
                     </a>
 
                     <a href="{{ route('fishpond.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('fish-monitoring*') ? 'active' : '' }}">
                         <svg class="nav-ic w-[18px] h-[18px] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12c3.5-4.5 8-6 12-6 2.4 0 4.4 1 6 2.8L22 6v12l-2-2.8C18.4 17 16.4 18 14 18c-4 0-8.5-1.5-12-6z"/><circle cx="8" cy="10.5" r="1.1"/></svg>
                         <span class="text-sm font-medium sidebar-label whitespace-nowrap">Fish Monitoring</span>
+                    </a>
+
+                    <a href="{{ route('income.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('income*') ? 'active' : '' }}">
+                        <svg class="nav-ic w-[18px] h-[18px] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 16l4-4 3 3 5-6"/></svg>
+                        <span class="text-sm font-medium sidebar-label whitespace-nowrap">Sales</span>
+                    </a>
+
+                    <a href="{{ route('price-reference.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('price-reference*') ? 'active' : '' }}">
+                        <svg class="nav-ic w-[18px] h-[18px] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.6 13.4L13.4 20.6a2 2 0 01-2.8 0l-7.2-7.2A2 2 0 013 12V4a1 1 0 011-1h8a2 2 0 011.4.6l7.2 7.2a2 2 0 010 2.6z"/><circle cx="7.5" cy="7.5" r="1.3"/></svg>
+                        <span class="text-sm sidebar-label whitespace-nowrap font-medium">Price Reference</span>
+                    </a>
+
+                    <a href="{{ route('sensor-history.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('sensor-history*') ? 'active' : '' }}">
+                        <svg class="nav-ic w-[18px] h-[18px] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+                        <span class="text-sm font-medium sidebar-label whitespace-nowrap">Sensor History</span>
                     </a>
 
                     <a href="{{ route('reports.index') }}" class="sidebar-link flex items-center gap-3 py-2.5 px-4 rounded-r-lg nav-transition {{ Request::is('reports*') ? 'active' : '' }}">

@@ -171,10 +171,30 @@ class ReportController extends Controller
             if (!$date || $date->format('Y-m') !== $month) continue;
             $rows[] = [
                 $data['itemName'] ?? '', $data['type'] ?? '', (float) ($data['quantitySold'] ?? 0),
-                $this->salesUnitLabel($data['unit'] ?? $data['saleUnit'] ?? ''), (float) ($data['saleAmount'] ?? 0), $date->format('Y-m-d'), $data['notes'] ?? '',
+                $this->salesUnitLabel($data['unit'] ?? $data['saleUnit'] ?? ''),
+                $this->saleWeightKg($data),
+                (float) ($data['saleAmount'] ?? 0), $date->format('Y-m-d'), $data['notes'] ?? '',
             ];
         }
         return $rows;
+    }
+
+    /**
+     * Kilos a sale represents, so kilos and pieces are never added as one number.
+     * A piece sale stores the weight it took off the batch in `weightSold`.
+     */
+    protected function saleWeightKg(array $data): ?float
+    {
+        if (isset($data['weightSold']) && is_numeric($data['weightSold'])) {
+            return round((float) $data['weightSold'], 4);
+        }
+
+        $unit = strtolower(trim((string) ($data['unit'] ?? $data['saleUnit'] ?? '')));
+        if (in_array($unit, ['kg', 'kilo', 'kilos', 'kilogram', 'kilograms'], true)) {
+            return round((float) ($data['quantitySold'] ?? 0), 4);
+        }
+
+        return null; // a piece sale recorded before weights were stored
     }
 
     protected function labeledQrPng(string $shareUrl, string $reportLabel, Carbon $expiresAt): string
@@ -267,8 +287,28 @@ class ReportController extends Controller
         $format = strtolower($format);
         $headers = str_contains(strtolower($title), 'inventory')
             ? ['Item Name', 'Type', 'Stock Unit', 'Quantity in Stock', 'Stock Type', 'Monthly Restocked', 'Monthly Consumption', 'Procurement Source', 'Last Stock Update']
-            : ['Item Name', 'Type', 'Quantity Sold', 'Unit Sold', 'Income (PHP)', 'Date of Sale', 'Notes'];
+            : ['Item Name', 'Type', 'Quantity Sold', 'Unit Sold', 'Weight (kg)', 'Income (PHP)', 'Date of Sale', 'Notes'];
         abort_unless(in_array($format, ['xlsx', 'pdf'], true), 404);
+
+        // Totals are kept per unit: a kilo total and a piece total are different
+        // things and must never be summed into one figure.
+        if (str_contains(strtolower($title), 'sales') && $rows) {
+            $kilos = 0.0;
+            $pieces = 0;
+            $income = 0.0;
+            foreach ($rows as $row) {
+                $income += (float) ($row[5] ?? 0);
+                if (($row[3] ?? '') === 'Kilos') {
+                    $kilos += (float) ($row[4] ?? 0);
+                } elseif (($row[3] ?? '') === 'Pcs') {
+                    $pieces += (int) round((float) ($row[2] ?? 0));
+                }
+            }
+            $rows[] = ['', '', '', '', '', '', '', ''];
+            $rows[] = ['Total kilos sold', '', '', 'kg', round($kilos, 3), '', '', ''];
+            $rows[] = ['Total pieces sold', '', $pieces, 'pcs', '', '', '', ''];
+            $rows[] = ['Total income', '', '', '', '', round($income, 2), '', ''];
+        }
 
         if ($format === 'xlsx') {
             $spreadsheet = new Spreadsheet();

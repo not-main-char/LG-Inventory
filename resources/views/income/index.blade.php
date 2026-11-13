@@ -1,5 +1,11 @@
-@extends('layouts.app', ['title' => 'Income Ledger'])
+@extends('layouts.app', ['title' => 'Sales'])
 @section('content')
+
+@if(session('status'))
+    <div class="ledger-card p-4 mb-4 text-sm" style="color:var(--color-forest-700); border-color:var(--color-forest-600)">
+        {{ session('status') }}
+    </div>
+@endif
 
 <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
     <div class="ledger-card p-6" style="border-left: 5px solid var(--color-water-600)">
@@ -100,6 +106,9 @@
                         <span class="stamp {{ $stampClass }}">{{ $data['type'] }}</span>
                         <span class="text-xs text-gray-500">{{ $data['itemName'] }}</span>
                     </div>
+                    @if(!empty($data['growthStage']))
+                        <div class="text-[11px] text-gray-400 mt-0.5">{{ $data['growthStage'] }}</div>
+                    @endif
                 </td>
                 <td class="p-3 align-middle">
                     <span class="figure text-sm">{{ $data['quantitySold'] ?? '—' }}</span>
@@ -126,12 +135,7 @@
                 <td class="p-3 align-middle text-sm text-gray-500">{{ $data['notes'] ?? '—' }}</td>
                 <td class="p-3 align-middle">
                     @if($role === 'admin')
-                        <div class="flex items-center gap-3">
-                            <form method="POST" action="{{ route('income.archive', $sale->id()) }}" onsubmit="return confirm('Archive this sale? Its quantity goes back into the harvest stock.')">
-                                @csrf
-                                <button type="submit" class="text-sm font-medium hover:underline" style="color:var(--color-rust-600)">Archive</button>
-                            </form>
-                        </div>
+                        <a href="{{ route('income.edit', $sale->id()) }}" class="text-sm font-medium hover:underline" style="color:var(--color-forest-700)">Edit</a>
                     @else
                         <span class="text-gray-400 italic text-xs">View only</span>
                     @endif
@@ -173,11 +177,23 @@
                                 data-wholesale="{{ $s['wholesale'] ?? '' }}"
                                 data-floor="{{ $s['floor'] ?? '' }}"
                                 data-ceiling="{{ $s['ceiling'] ?? '' }}"
-                                data-note="{{ $s['priceNote'] ?? '' }}">
-                            {{ $s['product'] }} ({{ rtrim(rtrim(number_format($s['remaining'], 4, '.', ''), '0'), '.') }} {{ $s['unit'] }} available)
+                                data-note="{{ $s['priceNote'] ?? '' }}"
+                                data-piece-price="{{ $s['piecePrice'] ?? '' }}"
+                                data-piece-note="{{ $s['pieceNote'] ?? '' }}"
+                                data-pieces="{{ $s['remainingFish'] ?? 0 }}">
+                            {{ $s['product'] }}@if(!empty($s['stage'])) — {{ $s['stage'] }}@endif ({{ rtrim(rtrim(number_format($s['remaining'], 4, '.', ''), '0'), '.') }} {{ $s['unit'] }} available)
                         </option>
                     @endforeach
                 </select>
+            </div>
+
+            <div id="unitWrap" class="hidden">
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Sell by</label>
+                <div class="flex gap-4 text-sm text-gray-700">
+                    <label class="flex items-center gap-2"><input type="radio" name="saleUnit" value="kilos" checked onchange="onUnitChange()"> Kilos</label>
+                    <label class="flex items-center gap-2"><input type="radio" name="saleUnit" value="pcs" onchange="onUnitChange()"> Pieces</label>
+                </div>
+                <p id="unitHint" class="text-[11px] text-gray-400 mt-1"></p>
             </div>
 
             <div class="grid grid-cols-2 gap-3">
@@ -224,7 +240,7 @@
                 <input type="date" id="saleDate" name="date" class="input-field" required>
             </div>
             <div>
-                <label class="block text-xs font-semibold text-gray-600 mb-1">Buyer name or reason for the discount (optional)</label>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Note</label>
                 <textarea name="notes" class="input-field" rows="2" placeholder="e.g. Aling Rosa, regular customer"></textarea>
             </div>
             <div class="pt-2 flex gap-2">
@@ -265,10 +281,36 @@
             document.getElementById('customerWrap').classList.remove('hidden');
             document.getElementById('qtyUnit').textContent = '';
             document.getElementById('priceHint').textContent = '';
+            document.getElementById('unitWrap')?.classList.add('hidden');
             recalcSale();
         }
         const m = document.getElementById('saleModal');
         m.classList.remove('hidden'); m.classList.add('flex');
+    }
+
+    function selectedUnit() {
+        const el = document.querySelector('input[name="saleUnit"]:checked');
+        return el ? el.value : 'kilos';
+    }
+
+    function sellingByPiece() {
+        const opt = selectedStock();
+        return !!(opt && opt.dataset.piecePrice && selectedUnit() === 'pcs');
+    }
+
+    // Fish fry and fingerlings are sold by the piece; the quantity limit is then
+    // the fish count left, not the kilos left.
+    function refreshUnitFields() {
+        const opt = selectedStock();
+        const byPiece = sellingByPiece();
+        const unit = byPiece ? 'pcs' : (opt ? opt.dataset.unit : '');
+        const max = byPiece ? opt.dataset.pieces : (opt ? opt.dataset.remaining : '');
+
+        document.getElementById('qtyUnit').textContent = opt ? '(' + unit + ')' : '';
+        document.getElementById('saleQty').max = max;
+
+        const hint = document.getElementById('unitHint');
+        if (hint) hint.textContent = byPiece && opt.dataset.pieceNote ? opt.dataset.pieceNote : '';
     }
 
     // The price book pre-fills the price; staff only change it when they need to.
@@ -276,17 +318,25 @@
         const opt = selectedStock();
         const hint = document.getElementById('priceHint');
         const wholesale = document.getElementById('saleType')?.value === 'wholesale';
-        const base = opt ? ((wholesale && opt.dataset.wholesale) ? opt.dataset.wholesale : opt.dataset.price) : '';
+        const byPiece = sellingByPiece();
+        const base = byPiece
+            ? opt.dataset.piecePrice
+            : (opt ? ((wholesale && opt.dataset.wholesale) ? opt.dataset.wholesale : opt.dataset.price) : '');
         const suggested = document.getElementById('suggestedPrice');
         if (suggested) suggested.value = base || '';
 
         if (base) {
             document.getElementById('unitPrice').value = base;
-            let text = ((wholesale && opt.dataset.wholesale) ? 'Wholesale' : 'Retail') + ' reference ' + peso(base) + ' per ' + opt.dataset.unit.replace(/s$/, '');
-            if (opt.dataset.note) text += ' — ' + opt.dataset.note;
-            if (opt.dataset.priceOn) {
-                const days = Math.floor((Date.now() - new Date(opt.dataset.priceOn).getTime()) / 86400000);
-                text += ', set ' + opt.dataset.priceOn + (days > 14 ? ' (more than 2 weeks old, please check it)' : '');
+            let text = (byPiece ? 'Piece' : ((wholesale && opt.dataset.wholesale) ? 'Wholesale' : 'Retail'))
+                + ' reference ' + peso(base) + ' per ' + (byPiece ? 'pc' : opt.dataset.unit.replace(/s$/, ''));
+            if (byPiece) {
+                if (opt.dataset.pieceNote) text += ' — ' + opt.dataset.pieceNote;
+            } else {
+                if (opt.dataset.note) text += ' — ' + opt.dataset.note;
+                if (opt.dataset.priceOn) {
+                    const days = Math.floor((Date.now() - new Date(opt.dataset.priceOn).getTime()) / 86400000);
+                    text += ', set ' + opt.dataset.priceOn + (days > 14 ? ' (more than 2 weeks old, please check it)' : '');
+                }
             }
             hint.textContent = text + '. You can change it.';
         } else {
@@ -299,8 +349,15 @@
 
     function onStockChange() {
         const opt = selectedStock();
-        document.getElementById('qtyUnit').textContent = opt ? '(' + opt.dataset.unit + ')' : '';
-        document.getElementById('saleQty').max = opt ? opt.dataset.remaining : '';
+        const wrap = document.getElementById('unitWrap');
+        if (wrap) wrap.classList.toggle('hidden', !(opt && opt.dataset.piecePrice));
+        document.querySelectorAll('input[name="saleUnit"]').forEach(r => { r.checked = r.value === 'kilos'; });
+        refreshUnitFields();
+        applyReferencePrice();
+    }
+
+    function onUnitChange() {
+        refreshUnitFields();
         applyReferencePrice();
     }
 
@@ -317,6 +374,8 @@
         const opt = selectedStock();
         const warn = document.getElementById('rangeWarning');
         if (!warn) return;
+        // The usual range is a per-kilo range; a per-piece sale is not compared to it.
+        if (sellingByPiece()) { warn.textContent = ''; warn.classList.add('hidden'); return; }
         const price = parseFloat(document.getElementById('unitPrice')?.value);
         const floor = opt && opt.dataset.floor !== '' ? parseFloat(opt.dataset.floor) : null;
         const ceiling = opt && opt.dataset.ceiling !== '' ? parseFloat(opt.dataset.ceiling) : null;
@@ -351,9 +410,12 @@
 
         const opt = selectedStock();
         const warn = document.getElementById('stockWarning');
-        const over = opt && qty > parseFloat(opt.dataset.remaining);
+        const byPiece = sellingByPiece();
+        const max = byPiece ? opt?.dataset.pieces : opt?.dataset.remaining;
+        const maxUnit = byPiece ? 'pcs' : opt?.dataset.unit;
+        const over = opt && qty > parseFloat(max || 0);
         warn.classList.toggle('hidden', !over);
-        if (over) warn.textContent = 'Only ' + opt.dataset.remaining + ' ' + opt.dataset.unit + ' available.';
+        if (over) warn.textContent = 'Only ' + max + ' ' + maxUnit + ' available.';
     }
 
     function closeSaleModal() {

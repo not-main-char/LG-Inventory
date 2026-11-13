@@ -126,13 +126,4 @@ class AuthController extends Controller
         return redirect()->route('login')->with('success', 'You have been securely logged out.');
     }
 
-    public function showSetup()
-    {
-        return view('auth.setup');
-    }
-
-    public function completeSetup(Request $request)
-    {
-        return redirect()->route('dashboard');
-    }
 }

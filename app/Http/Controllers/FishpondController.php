@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\FishStock;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Kreait\Firebase\Contract\Database;
@@ -30,6 +31,56 @@ class FishpondController extends Controller
         return view('fishpond.index', [
             'devices'      => $this->devices,
             'activeDevice' => $device,
+        ]);
+    }
+
+    /**
+     * Pond overview: one card per aquaponics pond with its batch count, species
+     * and biomass, plus a way into the full Fish Monitoring page.
+     */
+    public function ponds(FishStock $fishStock)
+    {
+        $read = $fishStock->batches();
+
+        $ponds = [];
+        foreach ($this->devices as $id => $label) {
+            $rows = array_values(array_filter($read['batches'], fn ($b) => $b['deviceLabel'] === $label));
+
+            $species = [];
+            $stages = [];
+            $biomass = 0.0;
+            $fish = 0;
+
+            foreach ($rows as $row) {
+                $species[strtoupper($row['species'])] = true;
+                if ($row['growthStage'] !== '') {
+                    $stages[$row['growthStage']] = true;
+                }
+                $biomass += $row['biomass'];
+                $fish += $row['fishCount'];
+            }
+
+            $species = array_keys($species);
+            sort($species);
+            $stages = array_keys($stages);
+            sort($stages);
+
+            $ponds[] = [
+                'device'       => $id,
+                'label'        => $label,
+                'batches'      => count($rows),
+                'species'      => $species,
+                'speciesCount' => count($species),
+                'stages'       => $stages,
+                'biomass'      => round($biomass, 2),
+                'fish'         => $fish,
+            ];
+        }
+
+        return view('fishpond.ponds', [
+            'ponds'  => $ponds,
+            'error'  => $read['error'],
+            'devices' => $this->devices,
         ]);
     }
 
@@ -72,6 +123,34 @@ class FishpondController extends Controller
             $records[] = $this->normalizeRecord((string) $key, $row, $now);
         }
 
+        // One card per batch. A batch can have several records — its creation and
+        // later mortality or sampling events — so the newest record is today's
+        // stock, and the dead fish are carried along as a tally to show.
+        $batches = [];
+        foreach ($records as $rec) {
+            $id = $rec['batchId'] !== '' ? $rec['batchId'] : $rec['key'];
+            if (!isset($batches[$id])) {
+                $batches[$id] = ['latest' => $rec, 'dead' => 0, 'reasons' => []];
+            }
+            if ($rec['recordType'] === 'mortality') {
+                $batches[$id]['dead'] += $rec['mortalityCount'];
+                if ($rec['mortalityReason'] !== '') {
+                    $batches[$id]['reasons'][$rec['mortalityReason']] = true;
+                }
+            }
+            if (strcmp((string) $rec['createdSort'], (string) $batches[$id]['latest']['createdSort']) >= 0) {
+                $batches[$id]['latest'] = $rec;
+            }
+        }
+
+        $records = [];
+        foreach ($batches as $group) {
+            $row = $group['latest'];
+            $row['deadCount'] = $group['dead'];
+            $row['mortalityReason'] = implode(', ', array_keys($group['reasons']));
+            $records[] = $row;
+        }
+
         // Newest batch first; fall back to the push key when dates are missing.
         usort($records, function ($a, $b) {
             $byDate = strcmp((string) $b['createdSort'], (string) $a['createdSort']);
@@ -89,7 +168,9 @@ class FishpondController extends Controller
             'fetchedAt'   => $now->toIso8601String(),
             'fingerprint' => $fingerprint,
             'summary'     => [
-                'batches'      => count($records),
+                // One batch can have several event records (mortality, sampling),
+                // so count distinct batches rather than rows.
+                'batches'      => count(array_unique(array_map(fn ($r) => $r['batchId'], $records))),
                 'fish'         => (int) array_sum(array_column($records, 'fishCount')),
                 'biomassKg'    => round(array_sum(array_column($records, 'biomass')), 2),
                 'species'      => count(array_unique(array_column($records, 'species'))),
@@ -107,9 +188,14 @@ class FishpondController extends Controller
     protected function normalizeRecord(string $key, array $row, Carbon $now): array
     {
         $batchId = trim((string) ($row['batchId'] ?? '')) ?: $key;
-        $species = trim((string) ($row['species'] ?? '')) ?: 'Unspecified';
+        // Species is stored the way the mobile app sent it, so "hito" and "Hito"
+        // can both exist. Everything is shown uppercase so the same spelling in
+        // any casing reads — and counts — as one species.
+        $species = strtoupper(preg_replace('/\s+/', ' ', trim((string) ($row['species'] ?? '')))) ?: 'Unspecified';
         $growthStage = trim((string) ($row['growthStage'] ?? '')) ?: 'Unknown';
         $recordType = trim((string) ($row['recordType'] ?? '')) ?: 'record';
+        $mortalityCount = max(0, (int) round($this->number($row['mortalityCount'] ?? null)));
+        $mortalityReason = trim((string) ($row['mortalityReason'] ?? ''));
 
         $fishCount = max(0, (int) round($this->number($row['fishCount'] ?? null)));
         $averageWeight = round($this->number($row['averageWeight'] ?? null), 2); // grams
@@ -150,6 +236,8 @@ class FishpondController extends Controller
             'species'            => $species,
             'growthStage'        => $growthStage,
             'recordType'         => $recordType,
+            'mortalityCount'     => $mortalityCount,
+            'mortalityReason'    => $mortalityReason,
             'fishCount'          => $fishCount,
             'averageWeight'      => $averageWeight,
             'biomass'            => $biomass,

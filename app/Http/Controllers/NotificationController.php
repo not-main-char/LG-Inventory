@@ -189,31 +189,4 @@ class NotificationController extends Controller
         return response()->json(['success' => true]);
     }
     
-    public function destroy($id, Request $request)
-    {
-        $uid = $request->attributes->get('firebase_user');
-        $role = $request->attributes->get('firebase_role');
-        
-        if ($role === 'admin') {
-            $this->firestore->collection('notifications')->document($id)->delete();
-        } else {
-            $this->firestore->collection('notifications')->document($id)->set(['deletedByAdmin' => true], ['merge' => true]);
-        }
-        
-        //Clear cache structures on change
-        Cache::forget('user_notifications_' . $uid);
-        
-        return response()->json(['success' => true]);
-    }
-    
-    public function restore($id, Request $request)
-    {
-        $this->firestore->collection('notifications')->document($id)->set(['deletedByAdmin' => false], ['merge' => true]);
-        
-        //Clear cache structures on change
-        $uid = $request->attributes->get('firebase_user');
-        Cache::forget('user_notifications_' . $uid);
-        
-        return response()->json(['success' => true]);
-    }
 }

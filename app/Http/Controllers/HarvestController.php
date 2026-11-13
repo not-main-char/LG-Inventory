@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\FishStock;
 use App\Support\HarvestStock;
 use App\Support\PriceBook;
 use Carbon\Carbon;
@@ -19,16 +20,26 @@ class HarvestController extends Controller
         $this->firestore = $firestore->database();
     }
 
-    public function index(Request $request, HarvestStock $stock)
+    public function index(Request $request, HarvestStock $stock, FishStock $fishStock)
     {
         $role = $request->attributes->get('firebase_role');
+
+        // Pond batches become selling stock here. The device records themselves
+        // are never edited; the mirrored harvest documents keep sold quantities.
+        try {
+            $fishSync = $fishStock->sync();
+        } catch (\Throwable $e) {
+            \Log::warning('Fish sync failed: ' . $e->getMessage());
+            $fishSync = ['created' => 0, 'updated' => 0, 'unchanged' => 0, 'error' => 'Fish stock could not be synced.'];
+        }
 
         $harvests  = $stock->activeHarvests();
         $prices    = $stock->priceReferences();
         $available = $stock->availableProducts($harvests, $prices);
-        $priceList = $stock->priceList($harvests, $prices);
 
-        $harvestRows = array_reverse($harvests); // newest first
+        // Plants and fish are shown on separate tabs; both newest first.
+        $harvestRows = array_reverse(array_values(array_filter($harvests, fn ($h) => $h['kind'] !== 'fish')));
+        $fishRows    = array_reverse(array_values(array_filter($harvests, fn ($h) => $h['kind'] === 'fish')));
         $batches = array_values(array_filter($harvests, fn ($h) => $h['remaining'] > 0.00001));
 
         $disposals = [];
@@ -63,10 +74,81 @@ class HarvestController extends Controller
             $prices
         );
 
+        $plantOptions = $this->plantOptions($seedItems);
+
         return view('harvest.index', compact(
-            'role', 'available', 'harvestRows', 'batches', 'disposals', 'priceList', 'seedItems',
-            'priceHints'
+            'role', 'available', 'harvestRows', 'fishRows', 'fishSync', 'batches', 'disposals',
+            'seedItems', 'priceHints', 'plantOptions'
         ));
+    }
+
+    /**
+     * Crops the harvest form offers: inventory seed items plus every plant the
+     * system has already recorded. That is why typing a new crop once (UBE, for
+     * example) makes it appear in the dropdown next time.
+     */
+    protected function plantOptions(array $seedItems): array
+    {
+        $names = [];
+        foreach ($seedItems as $item) {
+            $names[$item['name']] = true;
+        }
+
+        try {
+            foreach ($this->firestore->collection('product_catalog')->documents() as $doc) {
+                if (!$doc->exists() || ($doc->data()['kind'] ?? 'plant') !== 'plant') {
+                    continue;
+                }
+                $name = strtoupper(trim((string) ($doc->data()['name'] ?? '')));
+                if ($name !== '') {
+                    $names[$name] = true;
+                }
+            }
+
+            // Everything already harvested counts too, archived included, so a
+            // crop typed before this catalogue existed is still remembered.
+            foreach ($this->firestore->collection('harvests')->documents() as $doc) {
+                if (!$doc->exists() || ($doc->data()['kind'] ?? 'plant') === 'fish') {
+                    continue;
+                }
+                $name = strtoupper(trim((string) ($doc->data()['product'] ?? '')));
+                if ($name !== '' && !str_starts_with($name, 'DEV-')) {
+                    $names[$name] = true;
+                }
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('Product catalog read failed: ' . $e->getMessage());
+        }
+
+        $names = array_keys($names);
+        sort($names);
+
+        return $names;
+    }
+
+    /** Remember a plant so it stays in the dropdown, and which systems grew it. */
+    protected function rememberProduct(string $product, string $source): void
+    {
+        $name = strtoupper(trim($product));
+        if ($name === '') {
+            return;
+        }
+
+        try {
+            $ref = $this->firestore->collection('product_catalog')->document('plant-' . substr(sha1($name), 0, 20));
+            $snap = $ref->snapshot();
+            $systems = $snap->exists() ? (array) ($snap->data()['systems'] ?? []) : [];
+            $systems[$source] = true;
+
+            $ref->set([
+                'name'      => $name,
+                'kind'      => 'plant',
+                'systems'   => array_keys($systems),
+                'updatedAt' => Carbon::now('Asia/Manila'),
+            ], ['merge' => true]);
+        } catch (\Throwable $e) {
+            \Log::warning('Catalog write failed: ' . $e->getMessage());
+        }
     }
 
     /**
@@ -100,8 +182,10 @@ class HarvestController extends Controller
     public function store(Request $request)
     {
         $v = $request->validate([
-            'source'      => 'required|in:hydroponics,aquaculture,landfarming',
-            'kind'        => 'nullable|in:plant,fish',
+            // Fish is recorded from the ponds on its own tab, so this form only
+            // ever writes plants.
+            'source'      => 'required|in:hydroponics,landfarming',
+            'kind'        => 'nullable|in:plant',
             'product'     => 'required|string|max:120',
             'seedItemId'  => 'nullable|string|max:100',
             'quantity'    => 'required|numeric|min:0.01',
@@ -110,13 +194,7 @@ class HarvestController extends Controller
             'notes'       => 'nullable|string|max:255',
         ]);
 
-        // Aquaculture is always fish and landfarming is always plant;
-        // a hydroponics system can give either, so the user chooses.
-        $kind = match ($v['source']) {
-            'aquaculture' => 'fish',
-            'landfarming' => 'plant',
-            default       => ($v['kind'] ?? 'plant'),
-        };
+        $kind = 'plant';
 
         $qty = round((float) $v['quantity'], 4);
 
@@ -136,8 +214,9 @@ class HarvestController extends Controller
         ];
 
         $this->firestore->collection('harvests')->newDocument()->set($record);
+        $this->rememberProduct($record['product'], $v['source']);
 
-        return redirect()->to(route('harvest.index') . '#records')->with('success', 'Harvest recorded');
+        return redirect()->to(route('harvest.index') . '#plants')->with('success', 'Harvest recorded');
     }
 
     public function archive(string $id)
@@ -243,42 +322,6 @@ class HarvestController extends Controller
     }
 
     /** Add or update a product's reference retail price. */
-    public function savePrice(Request $request)
-    {
-        $v = $request->validate([
-            'product'        => 'required|string|max:120',
-            'unit'           => 'required|in:kilos,pcs',
-            'retailPrice'    => 'required|numeric|min:0',
-            'wholesalePrice' => 'nullable|numeric|min:0',
-            'floorPrice'     => 'nullable|numeric|min:0',
-            'ceilingPrice'   => 'nullable|numeric|min:0',
-            'piecesPerKg'    => 'nullable|numeric|min:0.01',
-            'note'           => 'nullable|string|max:255',
-        ]);
-
-        $floor   = ($v['floorPrice'] ?? null) !== null ? round((float) $v['floorPrice'], 2) : null;
-        $ceiling = ($v['ceilingPrice'] ?? null) !== null ? round((float) $v['ceilingPrice'], 2) : null;
-        if ($floor !== null && $ceiling !== null && $floor > $ceiling) {
-            return back()->withErrors(['floorPrice' => 'The usual low price must be lower than the usual high price.'])->withInput();
-        }
-
-        $product = strtoupper(trim($v['product']));
-
-        $this->firestore->collection('price_reference')->document(HarvestStock::priceId($product, $v['unit']))->set([
-            'product'        => $product,
-            'unit'           => $v['unit'],
-            'retailPrice'    => round((float) $v['retailPrice'], 2),
-            'wholesalePrice' => ($v['wholesalePrice'] ?? null) !== null ? round((float) $v['wholesalePrice'], 2) : null,
-            'floorPrice'     => $floor,
-            'ceilingPrice'   => $ceiling,
-            'piecesPerKg'    => ($v['piecesPerKg'] ?? null) !== null ? round((float) $v['piecesPerKg'], 2) : null,
-            'note'           => $v['note'] ?? '',
-            'updatedOn'      => Carbon::now('Asia/Manila')->format('Y-m-d'),
-            'updatedAt'      => Carbon::now('Asia/Manila'),
-        ], ['merge' => true]);
-
-        return redirect()->to(route('harvest.index') . '#prices')->with('success', 'Price saved');
-    }
 
     protected function fail(\Throwable $e)
     {

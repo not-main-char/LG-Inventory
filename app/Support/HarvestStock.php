@@ -45,7 +45,9 @@ class HarvestStock
             }
             $rows[] = [
                 'id'          => $doc->id(),
-                'product'     => $d['product'] ?? '',
+                // Same name in any casing is the same product: device records can
+                // arrive as "hito" while the farm recorded "HITO".
+                'product'     => strtoupper(preg_replace('/\s+/', ' ', trim((string) ($d['product'] ?? '')))),
                 'kind'        => $d['kind'] ?? 'plant',
                 'source'      => $d['source'] ?? '',
                 'unit'        => $d['unit'] ?? 'kilos',
@@ -56,11 +58,62 @@ class HarvestStock
                 'seedItemId'  => $d['seedItemId'] ?? null,
                 'deviceId'      => $d['deviceId'] ?? null,
                 'deviceEventKey' => $d['deviceEventKey'] ?? null,
+                'growthStage'  => (string) ($d['growthStage'] ?? ''),
+                'batch'        => (string) ($d['batch'] ?? ''),
+                'fishCount'    => (int) ($d['fishCount'] ?? 0),
+                'deadCount'    => (int) ($d['deadCount'] ?? 0),
+                'stockedCount' => (int) ($d['stockedCount'] ?? 0),
+                // Fish are stocked by count but sold by weight, so the count that
+                // is left follows the weight that is left.
+                'remainingFish' => $this->remainingFish(
+                    (int) ($d['fishCount'] ?? 0),
+                    (float) ($d['quantity'] ?? 0),
+                    (float) ($d['remainingQuantity'] ?? 0)
+                ),
+                'createdSort'  => $this->createdSort($d['createdAt'] ?? null),
             ];
         }
-        usort($rows, fn ($a, $b) => [$a['harvestDate'], $a['id']] <=> [$b['harvestDate'], $b['id']]);
+
+        // Harvest date first, then the moment it was recorded: two harvests on
+        // the same day used to fall back to the random document id, which put
+        // the newest one anywhere in the list.
+        usort($rows, fn ($a, $b) => [$a['harvestDate'], $a['createdSort'], $a['id']]
+            <=> [$b['harvestDate'], $b['createdSort'], $b['id']]);
 
         return $rows;
+    }
+
+    /** How many of a batch's fish are still there, from the weight left. */
+    protected function remainingFish(int $fishCount, float $quantity, float $remaining): int
+    {
+        if ($fishCount <= 0 || $quantity <= 0.00001) {
+            return 0;
+        }
+
+        return max(0, (int) round($fishCount * ($remaining / $quantity)));
+    }
+
+    /** Sortable timestamp for a harvest, whatever shape it was stored in. */
+    protected function createdSort($value): string
+    {
+        try {
+            if ($value instanceof \Google\Cloud\Core\Timestamp) {
+                return $value->get()->format('Y-m-d H:i:s');
+            }
+            if (is_object($value) && method_exists($value, 'toDateTime')) {
+                return $value->toDateTime()->format('Y-m-d H:i:s');
+            }
+            if ($value instanceof \DateTimeInterface) {
+                return $value->format('Y-m-d H:i:s');
+            }
+            if (is_string($value) && trim($value) !== '') {
+                return \Carbon\Carbon::parse($value)->format('Y-m-d H:i:s');
+            }
+        } catch (\Throwable $e) {
+            return '';
+        }
+
+        return '';
     }
 
     /** Price reference rows keyed by their document id. */
@@ -103,42 +156,50 @@ class HarvestStock
 
         $rows = [];
         foreach ($prices as $id => $row) {
-            $rows[$id] = $row + ['estimated' => false, 'saved' => true];
+            $rows[$id] = $row + [
+                'estimated' => false,
+                'saved'     => true,
+                'stage'     => '',
+                'seed'      => false,
+                'kind'      => $this->kindOf($row['product'], $harvests),
+            ];
         }
 
-        foreach ($harvests as $h) {
-            if ($h['remaining'] <= 0.00001) {
-                continue;
+        // Every fish stage now has its own price, so the list follows the same
+        // rows the sale form offers instead of one row per product name.
+        foreach ($this->availableProducts($harvests, $prices) as $a) {
+            $id = self::priceId($a['product'], $a['unit']);
+            if ($a['stage'] !== '') {
+                $id .= '|' . $a['stage'];
             }
-
-            $id = self::priceId($h['product'], $h['unit']);
             if (isset($rows[$id])) {
                 continue; // an admin price already applies
             }
-
-            $ref = $this->referenceFor($h['product'], $h['unit'], $prices);
-            if ($ref['price'] === null) {
+            if ($a['price'] === null) {
                 continue; // nobody publishes it and nothing was saved
             }
 
             $rows[$id] = [
                 'id'             => $id,
-                'product'        => $h['product'],
-                'unit'           => $h['unit'],
-                'retailPrice'    => $ref['price'],
-                'wholesalePrice' => $ref['wholesale'],
-                'floorPrice'     => $ref['floor'],
-                'ceilingPrice'   => $ref['ceiling'],
-                'piecesPerKg'    => $ref['piecesPerKg'],
-                'note'           => $ref['priceNote'],
-                'updatedOn'      => $ref['priceUpdatedOn'] ?? '',
-                'estimated'      => $ref['priceEstimated'],
-                'own'            => !empty($ref['priceOwnSource']),
+                'product'        => $a['product'],
+                'stage'          => $a['stage'],
+                'unit'           => $a['unit'],
+                'retailPrice'    => $a['price'],
+                'wholesalePrice' => $a['wholesale'],
+                'floorPrice'     => $a['floor'],
+                'ceilingPrice'   => $a['ceiling'],
+                'piecesPerKg'    => $a['piecesPerKg'],
+                'note'           => $a['priceNote'],
+                'updatedOn'      => $a['priceUpdatedOn'] ?? '',
+                'estimated'      => $a['priceEstimated'],
+                'own'            => !empty($a['priceOwnSource']),
+                'seed'           => !empty($a['priceSeed']),
+                'kind'           => $a['kind'],
                 'saved'          => false,
             ];
         }
 
-        uasort($rows, fn ($a, $b) => strcmp($a['product'] . $a['unit'], $b['product'] . $b['unit']));
+        uasort($rows, fn ($a, $b) => strcmp($a['product'] . $a['unit'] . ($a['stage'] ?? ''), $b['product'] . $b['unit'] . ($b['stage'] ?? '')));
 
         return $rows;
     }
@@ -157,21 +218,77 @@ class HarvestStock
             if ($h['remaining'] <= 0.00001) {
                 continue;
             }
-            $key = $h['product'] . '|' . $h['unit'];
+            // Fish are stocked and priced by growth stage (fry, juvenile, adult),
+            // so each stage is its own sellable row. Plants have no stage.
+            $isFish = ($h['kind'] ?? 'plant') === 'fish';
+            $stage  = $isFish ? trim((string) ($h['growthStage'] ?? '')) : '';
+            $key    = $h['product'] . '|' . $h['unit'] . '|' . $stage;
+
             if (!isset($groups[$key])) {
-                $groups[$key] = $this->referenceFor($h['product'], $h['unit'], $prices) + [
+                $groups[$key] = [
                     'key'       => $key,
                     'product'   => $h['product'],
                     'unit'      => $h['unit'],
-                    'kind'      => $h['kind'],
+                    'kind'      => $h['kind'] ?? 'plant',
+                    'stage'     => $stage,
                     'remaining' => 0.0,
+                    'remainingFish' => 0,
+                    'deadFish'  => 0,
+                    'stockedFish' => 0,
                 ];
             }
             $groups[$key]['remaining'] = round($groups[$key]['remaining'] + $h['remaining'], 4);
+            $groups[$key]['remainingFish'] += (int) ($h['remainingFish'] ?? 0);
+            $groups[$key]['deadFish'] += (int) ($h['deadCount'] ?? 0);
+            $groups[$key]['stockedFish'] += (int) ($h['stockedCount'] ?? 0);
+        }
+
+        foreach ($groups as $key => $g) {
+            $ref = $this->referenceFor($g['product'], $g['unit'], $prices, $g['stage']);
+
+            // Nursery fish (fry, fingerlings, juveniles) are sold by the piece at
+            // the published hatchery rate, so the sale form can offer both units.
+            $piecePrice = null;
+            $pieceNote  = '';
+            if (($g['kind'] ?? '') === 'fish' && $g['stage'] !== '') {
+                $piece = $this->referenceFor($g['product'], 'pcs', $prices, $g['stage']);
+                if ($piece['price'] !== null && $piece['priceSeed']) {
+                    $piecePrice = $piece['price'];
+                    $pieceNote  = $piece['priceNote'];
+                } elseif ($ref['price'] !== null && !empty($g['remainingFish']) && $g['remaining'] > 0) {
+                    // Market-size fish has no hatchery rate, but a piece price still
+                    // follows from its kilo price and the batch's own average weight.
+                    $avgKg = $g['remaining'] / $g['remainingFish'];
+                    $piecePrice = round($ref['price'] * $avgKg, 2);
+                    $pieceNote  = '₱' . number_format($ref['price'], 2) . '/kg × ' . number_format($avgKg * 1000, 0)
+                        . ' g average = ₱' . number_format($piecePrice, 2) . ' per piece.';
+                }
+            }
+
+            $groups[$key] = $ref + $g + [
+                'piecePrice' => $piecePrice,
+                'pieceNote'  => $pieceNote,
+            ];
         }
         ksort($groups);
 
         return array_values($groups);
+    }
+
+    /**
+     * Whether a product is fish or plant stock, so the price list can be split
+     * the same way the Harvest page is. Harvest records answer first; a product
+     * with no stock left is placed by the class the price book files it under.
+     */
+    public function kindOf(string $product, ?array $harvests = null): string
+    {
+        foreach ($harvests ?? $this->activeHarvests() as $h) {
+            if (strcasecmp((string) $h['product'], $product) === 0 && ($h['kind'] ?? '') !== '') {
+                return $h['kind'];
+            }
+        }
+
+        return in_array($this->book->classOf($product), ['fish_fresh', 'fish_marine'], true) ? 'fish' : 'plant';
     }
 
     /**
@@ -212,7 +329,7 @@ class HarvestStock
      * answers from the DA Region I list, and for a crop nobody publishes it
      * returns a clearly-marked estimate instead of leaving the box empty.
      */
-    protected function referenceFor(string $product, string $unit, array $prices): array
+    protected function referenceFor(string $product, string $unit, array $prices, string $stage = ''): array
     {
         $empty = [
             'price'          => null,
@@ -224,6 +341,7 @@ class HarvestStock
             'priceUpdatedOn' => null,
             'priceEstimated' => false,
             'priceOwnSource' => false,
+            'priceSeed'      => false,
         ];
 
         $saved = $prices[self::priceId($product, $unit)] ?? null;
@@ -238,10 +356,11 @@ class HarvestStock
                 'priceUpdatedOn' => $saved['updatedOn'],
                 'priceEstimated' => false,
                 'priceOwnSource' => false,
+                'priceSeed'      => false,
             ];
         }
 
-        $ref = $this->book->resolve($product, $unit);
+        $ref = $this->book->resolve($product, $unit, $stage);
         if (!$ref) {
             return $empty;
         }
@@ -256,6 +375,7 @@ class HarvestStock
             'priceUpdatedOn' => $ref['updatedOn'],
             'priceEstimated' => !empty($ref['estimated']),
             'priceOwnSource' => !empty($ref['ownSource']),
+            'priceSeed'      => !empty($ref['seed']),
         ];
     }
 }

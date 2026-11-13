@@ -31,7 +31,7 @@
 
 <div class="fp-stats">
     <div class="fp-stat">
-        <p class="fp-stat-label">Ponds monitored</p>
+        <p class="fp-stat-label">Batches monitored</p>
         <p class="fp-stat-value" id="statPonds">—</p>
     </div>
     <div class="fp-stat">
@@ -53,13 +53,13 @@
     <p class="fp-empty-text">
         When the mobile app writes to
         <span class="fp-mono">devices/{{ $activeDevice }}/fishpond_records</span>,
-        a pond box appears here automatically.
+        a batch box appears here automatically.
     </p>
 </div>
 
 <!-- Detail view: opens when a pond box is clicked -->
 <div id="fpModal" class="fp-backdrop fp-hide">
-    <div class="fp-modal" role="dialog" aria-modal="true" aria-label="Pond details" id="fpModalPanel"></div>
+    <div class="fp-modal" role="dialog" aria-modal="true" aria-label="Batch details" id="fpModalPanel"></div>
 </div>
 
 <div id="toasts" class="fp-toasts"></div>
@@ -206,6 +206,20 @@
     .fp-pill-ready { color: var(--color-amber-600); background: var(--color-amber-100); }
     .fp-pill-unknown { color: #6B6455; background: #F1ECDC; }
     .fp-pill-new { color: #fff; background: var(--color-rust-600); }
+
+    .fp-dead { margin-top: .35rem; font-size: .78rem; font-weight: 600; color: var(--color-rust-600); }
+    .fp-pill-dead { color: #fff; background: var(--color-rust-600); }
+    .fp-mortality {
+        display: flex; align-items: flex-start; gap: .45rem;
+        margin-top: .6rem; padding: .45rem .6rem;
+        border-radius: .5rem;
+        background: #FBEAE7;
+        border-left: 4px solid var(--color-rust-600);
+        color: #8A2B16;
+        font-size: .8rem; font-weight: 700; line-height: 1.3;
+        text-align: left;
+    }
+    .fp-mortality small { display: block; font-weight: 500; color: #A9543F; font-size: .72rem; }
 
     .fp-ring-wrap { display: flex; align-items: center; gap: .8rem; margin-top: .85rem; }
     .fp-ring { position: relative; width: 62px; height: 62px; flex-shrink: 0; }
@@ -483,13 +497,19 @@
                 '<div class="fp-pond-name">' +
                     '<div class="fp-species">' + esc(r.species) + newTag + '</div>' +
                 '</div>' +
-                '<span class="fp-pill ' + pillClass(r.growthStage) + '">' + esc(r.growthStage) + '</span>' +
+                '<div class="flex items-center gap-1.5 flex-shrink-0">' +
+                    (r.deadCount ? '<span class="fp-pill fp-pill-dead" title="Fish that died are not sellable stock">' + fmt(r.deadCount) + ' dead</span>' : '') +
+                    '<span class="fp-pill ' + pillClass(r.growthStage) + '">' + esc(r.growthStage) + '</span>' +
+                '</div>' +
             '</div>' +
             '<div class="fp-ring-wrap">' +
                 ring(r) +
                 '<div class="fp-count-wrap">' +
-                    '<div class="fp-count">' + fmt(r.fishCount) + '<small>fish</small></div>' +
-                    '<div class="fp-count-sub">in this batch</div>' +
+                    '<div class="fp-count">' + fmt(r.fishCount) + '<small>fish alive</small></div>' +
+                    '<div class="fp-count-sub"' +
+                        (r.deadCount ? ' title="' + fmt(r.fishCount + r.deadCount) + ' stocked, ' + fmt(r.fishCount) + ' alive"' : '') + '>' +
+                        (r.deadCount ? fmt(r.fishCount + r.deadCount) + '/' + fmt(r.fishCount) : 'in this batch') +
+                    '</div>' +
                 '</div>' +
             '</div>' +
             '<div class="fp-kpis">' +
@@ -519,7 +539,8 @@
         return '<div class="fp-modal-head">' +
                 '<div style="min-width:0">' +
                     '<div class="fp-modal-title">' + esc(r.species) + '</div>' +
-                    '<div style="margin-top:.45rem">' +
+                    '<div style="margin-top:.45rem; display:flex; gap:.35rem; flex-wrap:wrap">' +
+                        (r.deadCount ? '<span class="fp-pill fp-pill-dead">' + fmt(r.deadCount) + ' dead</span>' : '') +
                         '<span class="fp-pill ' + pillClass(r.growthStage) + '">' + esc(r.growthStage) + '</span>' +
                     '</div>' +
                 '</div>' +
@@ -531,10 +552,16 @@
                         '<h4>Stock today</h4>' +
                     '</div>' +
                     '<div class="fp-facts">' +
-                        fact('Fish count', fmt(r.fishCount)) +
+                        fact('Fish count', fmt(r.fishCount) + ' alive') +
                         fact('Average weight', r.averageWeight ? fmt(r.averageWeight, 2) + ' g' : '—') +
                         fact('Biomass', r.biomass ? fmt(r.biomass, 2) + ' kg' : '—') +
                     '</div>' +
+                    (r.deadCount
+                        ? '<div class="fp-mortality" role="note">⚠<span>' + fmt(r.deadCount) + ' fish died of ' +
+                            fmt(r.fishCount + r.deadCount) + ' stocked — ' + fmt(r.fishCount) + ' left' +
+                            (r.mortalityReason ? '<small>Reason: ' + esc(r.mortalityReason) + '</small>' : '') +
+                            '</span></div>'
+                        : '') +
                 '</div>' +
 
                 '<div class="fp-group">' +

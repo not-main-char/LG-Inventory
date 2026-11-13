@@ -45,6 +45,41 @@ class PriceBook
         ],
     ];
 
+    /**
+     * Hatchery seedstock rates for fish, published per piece (BFAR / SEAFDEC).
+     *
+     * The DA Region I list only carries market-size fish by the kilo, so fry,
+     * fingerlings and juveniles would all inherit the adult price. These are the
+     * published per-piece rates for the nursery stages, with the size class they
+     * were quoted for (grams per fish) so they can be converted to a per-kilo
+     * figure for the sale form.
+     */
+    public const SEED_PRICES = [
+        'TILAPIA' => [
+            'Fry'        => ['perPiece' => 0.25, 'low' => 0.20, 'high' => 0.30, 'grams' => 0.5, 'grade' => 'mixed-sex fry (size 24-22, up to 0.6 in)'],
+            'Fingerling' => ['perPiece' => 0.45, 'low' => 0.30, 'high' => 0.60, 'grams' => 1.5, 'grade' => 'mixed-sex fingerling (size 20-14, 0.5-5 g)'],
+            'Juvenile'   => ['perPiece' => 0.65, 'low' => 0.60, 'high' => 0.70, 'grams' => 6.0, 'grade' => 'juvenile / post-fingerling (about 2.4 in)'],
+        ],
+        'RED TILAPIA' => [
+            'Fry'        => ['perPiece' => 1.00, 'low' => 1.00, 'high' => 1.00, 'grams' => 0.5, 'grade' => 'red tilapia fry'],
+            'Fingerling' => ['perPiece' => 3.00, 'low' => 2.00, 'high' => 4.00, 'grams' => 1.5, 'grade' => 'red tilapia fingerling (medium to large)'],
+            'Juvenile'   => ['perPiece' => 5.00, 'low' => 5.00, 'high' => 5.00, 'grams' => 6.0, 'grade' => 'red tilapia juvenile'],
+        ],
+        'CARP' => [
+            'Fry'        => ['perPiece' => 0.17, 'low' => 0.17, 'high' => 0.17, 'grams' => 0.5, 'grade' => 'common carp fry (size 24)'],
+            'Fingerling' => ['perPiece' => 0.30, 'low' => 0.20, 'high' => 0.50, 'grams' => 1.5, 'grade' => 'common carp medium fingerling (size 17)'],
+            'Juvenile'   => ['perPiece' => 4.00, 'low' => 3.00, 'high' => 5.00, 'grams' => 6.0, 'grade' => 'carp juvenile (2-3 in, private hatchery)'],
+        ],
+        'HITO' => [
+            'Fry'        => ['perPiece' => 2.50, 'low' => 1.00, 'high' => 4.00, 'grams' => 0.5, 'grade' => 'hito fingerling'],
+            'Fingerling' => ['perPiece' => 2.50, 'low' => 1.00, 'high' => 4.00, 'grams' => 1.5, 'grade' => 'hito fingerling'],
+            'Juvenile'   => ['perPiece' => 2.50, 'low' => 1.00, 'high' => 4.00, 'grams' => 6.0, 'grade' => 'hito juvenile'],
+        ],
+    ];
+
+    /** Where the per-piece seedstock rates come from. */
+    public const SEED_SOURCE = 'BFAR / SEAFDEC hatchery rate';
+
     /** The commodity select values used by bantaypresyo.da.gov.ph. */
     public const CATEGORIES = [
         'lowland'  => '7',
@@ -181,7 +216,24 @@ class PriceBook
     /** Save an imported list so the app does not call the DA on every page load. */
     public function store(array $book): void
     {
-        $this->db->collection(self::COLLECTION)->document(self::DOCUMENT)->set($book);
+        $doc  = $this->db->collection(self::COLLECTION)->document(self::DOCUMENT);
+        $snap = $doc->snapshot();
+
+        // Capture what the feed said before this update replaced it, so the
+        // Price Reference history can show the previous figure.
+        if ($snap->exists()) {
+            try {
+                app(PriceHistory::class)->recordFeedChanges(
+                    $snap->data()['items'] ?? [],
+                    $book['items'] ?? [],
+                    $book['asOf'] ?? null
+                );
+            } catch (\Throwable $e) {
+                \Log::warning('Price history capture failed: ' . $e->getMessage());
+            }
+        }
+
+        $doc->set($book);
         static::$memo = $book;
     }
 
@@ -247,8 +299,18 @@ class PriceBook
      * Shape matches a saved price_reference row, plus "estimated" and the
      * note that explains where the number came from.
      */
-    public function resolve(string $product, string $unit): ?array
+    public function resolve(string $product, string $unit, string $stage = ''): ?array
     {
+        // Nursery fish are quoted per piece, not per kilo, so their rate comes
+        // from the seedstock table before any market-size fish price applies.
+        $seed = $this->seedPrice($product, $stage);
+        if ($seed) {
+            $fromSeed = $this->fromSeed($unit, $seed);
+            if ($fromSeed) {
+                return $fromSeed;
+            }
+        }
+
         $book = $this->load();
         if (empty($book['items'])) {
             return null;
@@ -267,6 +329,107 @@ class PriceBook
         }
 
         return $this->estimate($product, $unit, $book);
+    }
+
+    /** The seedstock rate for one fish stage, if we have one. */
+    public function seedPrice(string $product, string $stage): ?array
+    {
+        $stageKey = $this->stageKey($stage);
+        $name     = $this->normalise($product);
+        if ($stageKey === null || $name === '') {
+            return null;
+        }
+
+        $loose = null;
+        foreach (self::SEED_PRICES as $fish => $stages) {
+            if (!isset($stages[$stageKey])) {
+                continue;
+            }
+            $row = $stages[$stageKey] + ['stage' => $stageKey, 'fish' => $fish];
+            $key = $this->normalise($fish);
+
+            if ($key === $name) {
+                return $row;
+            }
+            if ($loose === null && (str_contains($name, $key) || str_contains($key, $name))) {
+                $loose = $row;
+            }
+        }
+
+        return $loose;
+    }
+
+    /** Which nursery stage a growth-stage label names. Adult fish return null. */
+    protected function stageKey(string $stage): ?string
+    {
+        $s = $this->normalise($stage);
+        if ($s === '') {
+            return null;
+        }
+        if (str_contains($s, 'FRY')) {
+            return 'Fry';
+        }
+        if (str_contains($s, 'FINGERLING')) {
+            return 'Fingerling';
+        }
+        if (str_contains($s, 'JUVENILE')) {
+            return 'Juvenile';
+        }
+
+        return null;
+    }
+
+    /** A per-piece seedstock rate turned into the unit the farm sells. */
+    protected function fromSeed(string $unit, array $seed): ?array
+    {
+        $perPiece = (float) ($seed['perPiece'] ?? 0);
+        if ($perPiece <= 0) {
+            return null;
+        }
+
+        $pieces = null;
+        if ($this->isPieceUnit($unit)) {
+            $price = $perPiece;
+            $low   = $seed['low'] ?? null;
+            $high  = $seed['high'] ?? null;
+        } else {
+            // The rate is quoted for a size class, so that class's weight is what
+            // converts it: counting a 6 g juvenile as 91 g would underprice it.
+            $g = (float) ($seed['grams'] ?? 0);
+            if ($g <= 0) {
+                return null;
+            }
+            $pieces = 1000 / $g;
+            $price  = $perPiece * $pieces;
+            $low    = isset($seed['low']) ? (float) $seed['low'] * $pieces : null;
+            $high   = isset($seed['high']) ? (float) $seed['high'] * $pieces : null;
+        }
+
+        $price = round($price, 2);
+        if ($price <= 0) {
+            return null;
+        }
+
+        $note = self::SEED_SOURCE . ' of ₱' . number_format($perPiece, 2) . ' per piece for '
+            . $seed['grade'] . '.';
+        if ($pieces) {
+            $note .= ' At ' . rtrim(rtrim(number_format((float) $seed['grams'], 2, '.', ''), '0'), '.')
+                . ' g per fish that is ' . number_format($pieces, 0) . ' pcs/kg, so the same price works out to ₱'
+                . number_format($price, 2) . ' per kilo.';
+        }
+
+        return [
+            'price'          => $price,
+            'wholesale'      => null,
+            'floor'          => $low !== null ? round($low, 2) : round($price * 0.5, 2),
+            'ceiling'        => $high !== null ? round($high, 2) : round($price * 2, 2),
+            'piecesPerKg'    => $pieces !== null ? round($pieces, 2) : null,
+            'note'           => $note,
+            'updatedOn'      => null,
+            'estimated'      => false,
+            'ownSource'      => false,
+            'seed'           => true,
+        ];
     }
 
     /** A crop's own published price, matched by name. */

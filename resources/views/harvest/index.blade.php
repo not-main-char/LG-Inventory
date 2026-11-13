@@ -9,15 +9,26 @@
     $sourceLabel = ['hydroponics' => 'Hydroponics', 'aquaculture' => 'Aquaculture', 'landfarming' => 'Landfarming'];
 @endphp
 
-{{-- Available stock: what Sales can sell right now --}}
+{{-- Tabs: which kind of harvest is being viewed. --}}
+<div class="flex gap-2 p-1 bg-[#EFE9D8] rounded-xl w-fit mb-6 flex-wrap" id="harvestTabs">
+    <button type="button" data-tab="plants" class="px-6 py-2.5 rounded-lg text-sm font-semibold transition">Plants</button>
+    <button type="button" data-tab="fish" class="px-6 py-2.5 rounded-lg text-sm font-semibold transition">Fish</button>
+    <button type="button" data-tab="disposals" class="px-6 py-2.5 rounded-lg text-sm font-semibold transition">Self-consumed &amp; DA</button>
+</div>
+
+{{-- Available stock: shows the kind of the active tab (plants or fish). --}}
+<div id="availableSection">
 <h3 class="font-display text-base font-semibold mb-3" style="color:var(--color-ink-900)">Available for Sale</h3>
 
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
     @forelse($available as $a)
-        <div class="ledger-card p-4">
+        <div class="ledger-card p-4" data-kind="{{ $a['kind'] }}">
             <span class="stamp {{ $a['kind'] === 'fish' ? 'stamp-fish' : 'stamp-plant' }}">{{ $a['kind'] }}</span>
-            <p class="text-sm font-medium text-gray-800 mt-2">{{ $a['product'] }}</p>
+            <p class="text-sm font-medium text-gray-800 mt-2">{{ $a['product'] }}@if(!empty($a['stage'])) <span class="text-xs font-normal text-gray-500">— {{ $a['stage'] }}</span>@endif</p>
             <p class="figure text-xl mt-1" style="color:var(--color-forest-700)">{{ $num($a['remaining']) }} <span class="text-sm font-normal text-gray-500">{{ $unitLabel($a['unit']) }}</span></p>
+            @if($a['kind'] === 'fish' && !empty($a['remainingFish']))
+                <p class="text-xs text-gray-500">{{ number_format($a['remainingFish']) }} fish left</p>
+            @endif
             <p class="text-xs text-gray-400 mt-1">
                 @if($a['price'] !== null)
                     Reference price ₱{{ number_format($a['price'], 2) }}@if(!empty($a['priceEstimated'])) <span title="{{ $a['priceNote'] }}">(estimate)</span>@endif
@@ -29,30 +40,26 @@
     @empty
         <p class="text-sm text-gray-400 col-span-full">Nothing is available to sell yet. Add a harvest to start.</p>
     @endforelse
+    <p id="availableEmpty" class="hidden text-sm text-gray-400 col-span-full"></p>
+</div>
 </div>
 
-{{-- Tabs --}}
-<div class="flex gap-2 p-1 bg-[#EFE9D8] rounded-xl w-fit mb-6 flex-wrap" id="harvestTabs">
-    <button type="button" data-tab="records" class="px-6 py-2.5 rounded-lg text-sm font-semibold transition">Harvest Records</button>
-    <button type="button" data-tab="disposals" class="px-6 py-2.5 rounded-lg text-sm font-semibold transition">Self-consumed &amp; DA</button>
-    <button type="button" data-tab="prices" class="px-6 py-2.5 rounded-lg text-sm font-semibold transition">Price Reference</button>
-</div>
-
-{{-- ============ Harvest records ============ --}}
-<div data-panel="records">
-    <div class="flex items-center justify-between mb-3">
-        <h3 class="font-display text-base font-semibold" style="color:var(--color-ink-900)">Harvest Records</h3>
+{{-- ============ Plant harvests ============ --}}
+<div data-panel="plants">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-3">
+        <h3 class="font-display text-base font-semibold" style="color:var(--color-ink-900)">Plant Harvests</h3>
         @if($role === 'admin')
             <button onclick="openHarvestModal()" class="btn-primary px-4 py-2.5 text-sm flex items-center gap-2">
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
-                Add Harvest
+                Add Plant Harvest
             </button>
         @endif
     </div>
 
+
     <div class="ledger-card overflow-hidden mb-8">
         <div class="overflow-x-auto">
-        <table class="min-w-full ledger-table">
+        <table class="min-w-full ledger-table" id="plantTable">
             <thead>
                 <tr>
                     <th class="p-3 text-left">Harvest Date</th>
@@ -66,7 +73,7 @@
             </thead>
             <tbody>
                 @foreach($harvestRows as $h)
-                <tr class="border-b border-[#F1ECDC]">
+                <tr class="border-b border-[#F1ECDC]" data-source="{{ $h['source'] }}">
                     <td class="p-3 align-middle text-sm text-gray-600 whitespace-nowrap">
                         {{ \Carbon\Carbon::parse($h['harvestDate'])->format('M d, Y') }}
                     </td>
@@ -93,7 +100,73 @@
                 </tr>
                 @endforeach
                 @if(count($harvestRows) === 0)
-                <tr><td colspan="7" class="p-8 text-center text-sm text-gray-400">No harvests recorded yet.</td></tr>
+                <tr><td colspan="7" class="p-8 text-center text-sm text-gray-400">No plant harvests recorded yet.</td></tr>
+                @endif
+            </tbody>
+        </table>
+        </div>
+    </div>
+</div>
+
+{{-- ============ Fish ============ --}}
+<div data-panel="fish" class="hidden">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-3">
+        <div>
+            <h3 class="font-display text-base font-semibold" style="color:var(--color-ink-900)">Fish</h3>
+        </div>
+    </div>
+
+    @if(!empty($fishSync['error']))
+        <div class="mb-3 text-xs px-3 py-2 rounded-lg" style="background:#fdf1dc;color:#8a5a1e">{{ $fishSync['error'] }}</div>
+    @endif
+
+    <div class="ledger-card overflow-hidden mb-8">
+        <div class="overflow-x-auto">
+        <table class="min-w-full ledger-table">
+            <thead>
+                <tr>
+                    <th class="p-3 text-left">Fish</th>
+                    <th class="p-3 text-left">Growth Stage</th>
+                    <th class="p-3 text-left">Batch</th>
+                    <th class="p-3 text-left">Quantity</th>
+                    <th class="p-3 text-left">Date</th>
+                    <th class="p-3 text-left">Notes</th>
+                    <th class="p-3 text-left">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach($fishRows as $f)
+                <tr class="border-b border-[#F1ECDC]">
+                    <td class="p-3 align-middle">
+                        <div class="flex items-center gap-2">
+                            <span class="stamp stamp-fish">fish</span>
+                            <span class="text-sm font-medium text-gray-800">{{ $f['product'] }}</span>
+                        </div>
+                    </td>
+                    <td class="p-3 align-middle text-sm text-gray-600">{{ filled($f['growthStage']) ? $f['growthStage'] : '—' }}</td>
+                    <td class="p-3 align-middle text-sm text-gray-600">{{ filled($f['batch']) ? $f['batch'] : '—' }}</td>
+                    <td class="p-3 align-middle text-sm">
+                        <span class="figure" style="color:{{ $f['remaining'] > 0.00001 ? 'var(--color-forest-700)' : '#9C9377' }}">{{ $num($f['remaining']) }} kg</span>
+                        @if($f['fishCount'] > 0)
+                            <div class="text-[11px] text-gray-500">{{ number_format($f['remainingFish']) }} fish left</div>
+                        @endif
+                    </td>
+                    <td class="p-3 align-middle text-sm text-gray-600 whitespace-nowrap">{{ \Carbon\Carbon::parse($f['harvestDate'])->format('M d, Y') }}</td>
+                    <td class="p-3 align-middle text-sm text-gray-500 max-w-[20rem] whitespace-normal">{{ filled($f['notes']) ? $f['notes'] : '—' }}</td>
+                    <td class="p-3 align-middle">
+                        @if($role === 'admin')
+                            <form method="POST" action="{{ route('harvest.archive', $f['id']) }}" onsubmit="return confirm('Archive this fish record?')">
+                                @csrf
+                                <button type="submit" class="text-sm font-medium hover:underline" style="color:var(--color-rust-600)">Archive</button>
+                            </form>
+                        @else
+                            <span class="text-gray-400 italic text-xs">View only</span>
+                        @endif
+                    </td>
+                </tr>
+                @endforeach
+                @if(count($fishRows) === 0)
+                <tr><td colspan="7" class="p-8 text-center text-sm text-gray-400">No fish batches yet. They appear here once Fish Monitoring receives pond data.</td></tr>
                 @endif
             </tbody>
         </table>
@@ -152,82 +225,10 @@
     </div>
 </div>
 
-{{-- ============ Price reference ============ --}}
-<div data-panel="prices" class="hidden">
-    <div class="flex items-center justify-between mb-3">
-        <h3 class="font-display text-base font-semibold" style="color:var(--color-ink-900)">Price Reference</h3>
-        @if($role === 'admin')
-            <button onclick="openPriceModal()" class="btn-ghost px-4 py-2.5 text-sm">Set a Price</button>
-        @endif
-    </div>
-
-    <div class="ledger-card overflow-hidden mb-8">
-        <div class="overflow-x-auto">
-        <table class="min-w-full ledger-table">
-            <thead>
-                <tr>
-                    <th class="p-3 text-left">Product</th>
-                    <th class="p-3 text-left">Unit</th>
-                    <th class="p-3 text-left">Retail Price</th>
-                    <th class="p-3 text-left">Wholesale</th>
-                    <th class="p-3 text-left">Usual Range</th>
-                    <th class="p-3 text-left">Last Updated</th>
-                    <th class="p-3 text-left">Source / Note</th>
-                    <th class="p-3 text-left">Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach($priceList as $p)
-                @php $stale = empty($p['own']) && $p['updatedOn'] !== '' && \Carbon\Carbon::parse($p['updatedOn'])->diffInDays(now('Asia/Manila')) > 14; @endphp
-                <tr class="border-b border-[#F1ECDC]">
-                    <td class="p-3 align-middle text-sm font-medium text-gray-800">{{ $p['product'] }}</td>
-                    <td class="p-3 align-middle text-sm text-gray-600">
-                        {{ $unitLabel($p['unit']) }}
-                        @if($p['piecesPerKg'] !== null)
-                            <div class="text-[11px] text-gray-400">{{ rtrim(rtrim(number_format($p['piecesPerKg'], 2, '.', ''), '0'), '.') }} pcs/kg</div>
-                        @endif
-                    </td>
-                    <td class="p-3 align-middle figure text-sm" style="color:var(--color-forest-700)">
-                        ₱{{ number_format($p['retailPrice'], 2) }}
-                        @if(!empty($p['estimated']))
-                            <span style="font-size:11px;color:#9C9377;display:block">estimate</span>
-                        @endif
-                    </td>
-                    <td class="p-3 align-middle figure text-sm text-gray-600">{{ $p['wholesalePrice'] !== null ? '₱' . number_format($p['wholesalePrice'], 2) : '—' }}</td>
-                    <td class="p-3 align-middle text-sm text-gray-600">
-                        @if($p['floorPrice'] !== null || $p['ceilingPrice'] !== null)
-                            ₱{{ $p['floorPrice'] !== null ? number_format($p['floorPrice'], 2) : '0.00' }} – ₱{{ $p['ceilingPrice'] !== null ? number_format($p['ceilingPrice'], 2) : '—' }}
-                        @else
-                            <span class="text-gray-400">Not set</span>
-                        @endif
-                    </td>
-                    <td class="p-3 align-middle text-sm {{ $stale ? '' : 'text-gray-600' }}" style="{{ $stale ? 'color:var(--color-rust-600)' : '' }}">
-                        {{ $p['updatedOn'] !== '' ? \Carbon\Carbon::parse($p['updatedOn'])->format('M d, Y') : '—' }}
-                        @if($stale)<div class="text-[11px]">More than 2 weeks old</div>@endif
-                    </td>
-                    <td class="p-3 align-middle text-sm text-gray-500 max-w-[24rem] whitespace-normal">{{ $p['note'] !== '' ? $p['note'] : '—' }}</td>
-                    <td class="p-3 align-middle">
-                        @if($role === 'admin')
-                            <button type="button" onclick='openPriceModal(@json($p))' class="text-sm font-medium hover:underline" style="color:var(--color-forest-700)">{{ !empty($p['saved']) ? 'Edit' : 'Set price' }}</button>
-                        @else
-                            <span class="text-gray-400 italic text-xs">View only</span>
-                        @endif
-                    </td>
-                </tr>
-                @endforeach
-                @if(count($priceList) === 0)
-                <tr><td colspan="8" class="p-8 text-center text-sm text-gray-400">Nothing priced yet. Record a harvest and its DA Region I price appears here.</td></tr>
-                @endif
-            </tbody>
-        </table>
-        </div>
-    </div>
-</div>
-
 {{-- Add Harvest modal --}}
 <div id="harvestModal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50 p-4 overflow-y-auto">
     <div class="modal-panel p-6 w-full max-w-md my-8">
-        <h2 class="font-display text-xl font-semibold mb-4" style="color:var(--color-ink-900)">Add Harvest</h2>
+        <h2 class="font-display text-xl font-semibold mb-4" style="color:var(--color-ink-900)">Add Plant Harvest</h2>
         <form id="harvestForm" method="POST" action="{{ route('harvest.store') }}" class="space-y-3" onsubmit="return prepareHarvest()">
             @csrf
             <input type="hidden" name="product" id="hProduct">
@@ -235,26 +236,28 @@
             <input type="hidden" name="kind" id="hKind">
 
             <div>
-                <label class="block text-xs font-semibold text-gray-600 mb-1">Source</label>
-                <select id="hSource" name="source" class="input-field" required onchange="onHarvestSourceChange()">
-                    <option value="hydroponics">Hydroponics</option>
-                    <option value="aquaculture">Aquaculture (fish pond)</option>
-                    <option value="landfarming">Landfarming</option>
-                </select>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Grown in</label>
+                <div class="flex items-center gap-5 text-sm text-gray-700">
+                    <label class="inline-flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="source" value="hydroponics" class="h-source" checked>
+                        <span>Hydroponics</span>
+                    </label>
+                    <label class="inline-flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="source" value="landfarming" class="h-source">
+                        <span>Landfarming</span>
+                    </label>
+                </div>
             </div>
 
-            <div id="hKindWrap">
-                <label class="block text-xs font-semibold text-gray-600 mb-1">What was harvested from the hydroponics system?</label>
-                <select id="hKindSelect" class="input-field" onchange="renderHarvestProduct()">
-                    <option value="plant">Plant</option>
-                    <option value="fish">Fish</option>
-                </select>
-            </div>
-
-            <div>
-                <label class="block text-xs font-semibold text-gray-600 mb-1">Product</label>
-                <select id="hProductSelect" class="input-field" onchange="renderHarvestProduct()"></select>
-                <input type="text" id="hProductText" class="input-field uppercase mt-1.5" placeholder="Type the name, e.g. TILAPIA" oninput="this.value = this.value.toUpperCase(); updatePriceHint()">
+            <div class="relative">
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Plant</label>
+                <input type="text" id="hPlantInput" class="input-field" placeholder="Type to search, e.g. LETTUCE" autocomplete="off"
+                       oninput="filterPlants()" onfocus="filterPlants(true)">
+                <div id="hPlantList" class="hidden absolute z-20 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-lg border border-[#ECE5CE] bg-white shadow-lg"></div>
+                <label id="hNewWrap" class="hidden items-center gap-2 mt-2 text-xs text-gray-600 cursor-pointer">
+                    <input type="checkbox" id="hNewPlant">
+                    <span>This is a new plant — add it to the list</span>
+                </label>
                 <p id="hProductHint" class="text-[11px] text-gray-400 mt-1"></p>
                 <p id="hPriceHint" class="text-xs mt-1" style="color:var(--color-forest-700)"></p>
             </div>
@@ -336,71 +339,10 @@
     </div>
 </div>
 
-{{-- Price modal --}}
-<div id="priceModal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50 p-4 overflow-y-auto">
-    <div class="modal-panel p-6 w-full max-w-md my-8">
-        <h2 class="font-display text-xl font-semibold mb-4" style="color:var(--color-ink-900)">Reference Price</h2>
-        <form id="priceForm" method="POST" action="{{ route('harvest.price') }}" class="space-y-3">
-            @csrf
-            <div>
-                <label class="block text-xs font-semibold text-gray-600 mb-1">Product</label>
-                <input type="text" name="product" id="pProduct" list="productList" class="input-field uppercase" required oninput="this.value = this.value.toUpperCase()">
-                <datalist id="productList">
-                    @foreach(collect($available)->pluck('product')->merge(collect($priceList)->pluck('product'))->unique() as $name)
-                        <option value="{{ $name }}"></option>
-                    @endforeach
-                </datalist>
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-                <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Unit</label>
-                    <select name="unit" id="pUnit" class="input-field" required>
-                        <option value="kilos">Kilos</option>
-                        <option value="pcs">Pcs</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Retail price per unit (₱)</label>
-                    <input type="number" step="any" min="0" name="retailPrice" id="pPrice" class="input-field" required>
-                </div>
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-                <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Wholesale price (₱)</label>
-                    <input type="number" step="any" min="0" name="wholesalePrice" id="pWholesale" class="input-field" placeholder="Optional">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Pieces per kilo</label>
-                    <input type="number" step="any" min="0.01" name="piecesPerKg" id="pPieces" class="input-field" placeholder="e.g. 3.5">
-                    <p class="text-[11px] text-gray-400 mt-1">For crops quoted per kilo but sold per piece.</p>
-                </div>
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-                <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Usual low (₱)</label>
-                    <input type="number" step="any" min="0" name="floorPrice" id="pFloor" class="input-field" placeholder="Optional">
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Usual high (₱)</label>
-                    <input type="number" step="any" min="0" name="ceilingPrice" id="pCeiling" class="input-field" placeholder="Optional">
-                </div>
-            </div>
-            <div>
-                <label class="block text-xs font-semibold text-gray-600 mb-1">Source / note (optional)</label>
-                <input type="text" name="note" id="pNote" class="input-field" maxlength="255" placeholder="e.g. DA Bantay Presyo, week of Nov 3">
-            </div>
-            <div class="pt-2 flex gap-2">
-                <button type="submit" class="btn-primary w-full py-2.5 text-sm">Save Price</button>
-                <button type="button" onclick="closeModal('priceModal')" class="btn-ghost w-full py-2.5 text-sm">Cancel</button>
-            </div>
-        </form>
-    </div>
-</div>
 @endsection
 
 @push('scripts')
 <script>
-    const seedItems = @json($seedItems);
     const priceHints = @json($priceHints);
 
     function localToday() {
@@ -418,14 +360,16 @@
     }
 
     // ---- Tabs ----
-    const TAB_NAMES = ['records', 'disposals', 'prices'];
+    const TAB_NAMES = ['plants', 'fish', 'disposals'];
 
     function activateTab(name) {
-        if (!TAB_NAMES.includes(name)) name = 'records';
+        if (!TAB_NAMES.includes(name)) name = 'plants';
 
         document.querySelectorAll('[data-panel]').forEach(p => {
             p.classList.toggle('hidden', p.dataset.panel !== name);
         });
+
+        applyAvailability(name);
 
         document.querySelectorAll('#harvestTabs [data-tab]').forEach(b => {
             const on = b.dataset.tab === name;
@@ -445,7 +389,8 @@
 
     activateTab(location.hash.replace('#', ''));
 
-    // ---- Add Harvest ----
+    // ---- Add Plant Harvest ----
+    const PLANT_OPTIONS = @json($plantOptions);
 
     // The price a sale would start from for the chosen crop and unit, so it can
     // be seen while the harvest is being recorded.
@@ -453,19 +398,9 @@
         const hint = document.getElementById('hPriceHint');
         if (!hint) return;
 
-        const kind = currentKind();
-        const select = document.getElementById('hProductSelect');
-        const text = document.getElementById('hProductText');
+        const input = document.getElementById('hPlantInput');
         const unit = document.getElementById('hUnit').value;
-
-        let product = '';
-        if (kind === 'plant' && select.value && select.value !== '__other') {
-            const item = seedItems.find(s => s.id === select.value);
-            product = item ? item.name : '';
-        } else {
-            product = text.value.trim().toUpperCase();
-        }
-
+        const product = input ? input.value.trim().toUpperCase() : '';
         const ref = product ? priceHints[product + '|' + unit] : null;
         const word = unit === 'pcs' ? 'pc' : 'kg';
 
@@ -484,74 +419,124 @@
             + ' price ₱' + Number(ref.price).toFixed(2) + ' per ' + word + on
             + ' — the Sales page starts from this.';
     }
-    function currentKind() {
-        const source = document.getElementById('hSource').value;
-        if (source === 'aquaculture') return 'fish';
-        if (source === 'landfarming') return 'plant';
-        return document.getElementById('hKindSelect').value;
-    }
 
     function openHarvestModal() {
         document.getElementById('harvestForm').reset();
         document.getElementById('hDate').value = localToday();
-        onHarvestSourceChange();
+        document.getElementById('hPlantInput').value = '';
+        refreshNewPlantBox();
+        closePlantList();
+        updatePriceHint();
         showModal('harvestModal');
     }
 
-    function onHarvestSourceChange() {
-        document.getElementById('hKindWrap').classList.toggle('hidden', document.getElementById('hSource').value !== 'hydroponics');
-        renderHarvestProduct();
-    }
-
-    // Plants are picked from the Seed items in Inventory (or typed under "Other");
-    // fish are always typed because no inventory item represents the fish itself.
-    function renderHarvestProduct() {
-        const kind = currentKind();
-        const select = document.getElementById('hProductSelect');
-        const text = document.getElementById('hProductText');
+    // Type-ahead over the plants the system already knows about, so a crop that
+    // was harvested once (UBE, for example) is offered again next time.
+    function filterPlants(showAll) {
+        const input = document.getElementById('hPlantInput');
+        const list = document.getElementById('hPlantList');
         const hint = document.getElementById('hProductHint');
+        if (!input || !list) return;
 
-        if (kind === 'plant') {
-            const previous = select.value;
-            select.innerHTML = seedItems.map(s => `<option value="${s.id}">${s.name}</option>`).join('')
-                + '<option value="__other">Other (type it)</option>';
-            if (previous && [...select.options].some(o => o.value === previous)) select.value = previous;
-            select.classList.remove('hidden');
-            text.classList.toggle('hidden', select.value !== '__other');
-            hint.textContent = seedItems.length
-                ? 'These come from the Seed items in Inventory.'
-                : 'No Seed items in Inventory yet, so type the name under Other.';
-        } else {
-            select.classList.add('hidden');
-            text.classList.remove('hidden');
-            hint.textContent = 'Type the fish name, for example TILAPIA.';
+        const q = input.value.trim().toUpperCase();
+        const matches = PLANT_OPTIONS.filter(name => q === '' || name.indexOf(q) >= 0).slice(0, 50);
+
+        if (showAll === true || q !== '') {
+            list.innerHTML = matches.length
+                ? matches.map(name => '<button type="button" class="block w-full text-left px-3 py-2 text-sm hover:bg-[#F7F3E6]" data-name="' + name + '">' + name + '</button>').join('')
+                : '<p class="px-3 py-2 text-xs text-gray-400">No match — tick the box below to add it.</p>';
+            list.classList.remove('hidden');
+            list.querySelectorAll('button[data-name]').forEach(function (btn) {
+                btn.addEventListener('mousedown', function (e) {
+                    e.preventDefault();
+                    input.value = btn.dataset.name;
+                    updatePriceHint();
+                    closePlantList();
+                });
+            });
         }
 
+        hint.textContent = matches.length
+            ? 'Pick from the list, or type a name that is not there yet.'
+            : '';
+
+        refreshNewPlantBox();
         updatePriceHint();
     }
 
-    function prepareHarvest() {
-        const kind = currentKind();
-        const select = document.getElementById('hProductSelect');
-        const text = document.getElementById('hProductText');
-        let product = '', seedId = '';
+    // The "new plant" checkbox only appears when the typed name is not listed,
+    // so a typo cannot quietly create a second crop.
+    function refreshNewPlantBox() {
+        const input = document.getElementById('hPlantInput');
+        const wrap = document.getElementById('hNewWrap');
+        if (!input || !wrap) return;
 
-        if (kind === 'plant' && select.value && select.value !== '__other') {
-            const item = seedItems.find(s => s.id === select.value);
-            product = item ? item.name : '';
-            seedId = select.value;
-        } else {
-            product = text.value.trim().toUpperCase();
+        const q = input.value.trim().toUpperCase();
+        const isNew = q !== '' && PLANT_OPTIONS.indexOf(q) < 0;
+
+        wrap.classList.toggle('hidden', !isNew);
+        wrap.classList.toggle('flex', isNew);
+        if (!isNew) document.getElementById('hNewPlant').checked = false;
+    }
+
+    function closePlantList() {
+        const list = document.getElementById('hPlantList');
+        if (list) list.classList.add('hidden');
+        refreshNewPlantBox();
+    }
+
+    document.addEventListener('click', function (e) {
+        const input = document.getElementById('hPlantInput');
+        const list = document.getElementById('hPlantList');
+        if (!input || !list) return;
+        if (!e.target.closest('#hPlantList') && !e.target.closest('#hNewWrap') && e.target !== input) {
+            list.classList.add('hidden');
         }
+    });
+
+    function prepareHarvest() {
+        const product = document.getElementById('hPlantInput').value.trim().toUpperCase();
 
         if (!product) {
-            alert('Please choose or type what was harvested.');
+            alert('Choose or type what was planted.');
             return false;
         }
+
+        if (PLANT_OPTIONS.indexOf(product) < 0 && !document.getElementById('hNewPlant').checked) {
+            alert('"' + product + '" is not in the list yet. Tick "This is a new plant" to add it.');
+            return false;
+        }
+
         document.getElementById('hProduct').value = product;
-        document.getElementById('hSeedItemId').value = seedId;
-        document.getElementById('hKind').value = kind;
+        document.getElementById('hSeedItemId').value = '';
+        document.getElementById('hKind').value = 'plant';
         return true;
+    }
+
+    // Available for Sale follows the tab: plants on Plants, fish on Fish, and
+    // hidden on the disposal tab where stock is not being sold.
+    function applyAvailability(name) {
+        const section = document.getElementById('availableSection');
+        if (!section) return;
+
+        section.classList.toggle('hidden', name === 'disposals');
+
+        const want = name === 'fish' ? 'fish' : 'plant';
+        let shown = 0;
+
+        section.querySelectorAll('[data-kind]').forEach(function (card) {
+            const on = card.dataset.kind === want;
+            card.classList.toggle('hidden', !on);
+            if (on) shown++;
+        });
+
+        const empty = document.getElementById('availableEmpty');
+        if (empty) {
+            empty.classList.toggle('hidden', shown > 0);
+            empty.textContent = want === 'fish'
+                ? 'No fish stock available to sell right now.'
+                : 'No plant stock available to sell right now.';
+        }
     }
 
     // ---- Self-consume / DA ----
@@ -559,22 +544,6 @@
         const d = document.getElementById('dDate');
         if (d) d.value = localToday();
         showModal('disposeModal');
-    }
-
-    // ---- Price reference ----
-    function openPriceModal(p) {
-        document.getElementById('priceForm').reset();
-        if (p) {
-            document.getElementById('pProduct').value = p.product;
-            document.getElementById('pUnit').value = p.unit;
-            document.getElementById('pPrice').value = p.retailPrice;
-            document.getElementById('pWholesale').value = p.wholesalePrice ?? '';
-            document.getElementById('pPieces').value = p.piecesPerKg ?? '';
-            document.getElementById('pFloor').value = p.floorPrice ?? '';
-            document.getElementById('pCeiling').value = p.ceilingPrice ?? '';
-            document.getElementById('pNote').value = p.note || '';
-        }
-        showModal('priceModal');
     }
 
 </script>

@@ -180,6 +180,11 @@ class InventoryController extends Controller
             $itemData['sackWeightKg'] = (float)($validated['sackWeightKg'] ?? self::DEFAULT_SACK_WEIGHT_KG);
         }
 
+        // Optional alert floor: at or below it the item is critical, twice it is low.
+        if (isset($validated['minStock']) && $validated['minStock'] !== '') {
+            $itemData['minStock'] = (float) $validated['minStock'];
+        }
+
         // Daily consumption fields
         if ($validated['usageFrequency'] === 'daily') {
             $itemData['dailyConsumptionAmount'] = (float)($validated['dailyConsumptionAmount'] ?? 0);
@@ -202,12 +207,16 @@ class InventoryController extends Controller
             $itemData['daysToMaturity'] = (int)($validated['daysToMaturity'] ?? 0);
         }
 
-        // Stock history
+        // Stock history. Where the first stock came from lives here now instead
+        // of a column in the table.
+        $origin = $validated['procurementSource'] ?? 'DA';
         $itemData['stockHistory'] = [
             [
-                'action' => 'Initial stock',
+                'action' => 'New stock — ' . $origin,
+                'type' => 'procurement',
                 'quantity' => $validated['currentStock'] . ' ' . ($validated['unit'] ?? 'pcs'),
                 'date' => (Carbon::now('Asia/Manila'))->format('M d, Y H:i'),
+                'notes' => $origin === 'DA' ? 'Provided by the DA' : 'Bought by the farm',
             ]
         ];
 
@@ -264,6 +273,7 @@ class InventoryController extends Controller
             'seedsPerCycle' => 'nullable|numeric|min:0',
             'daysToMaturity' => 'nullable|integer|min:0',
             'procurementSource' => 'required|in:DA,Farm Purchase',
+            'minStock' => 'nullable|numeric|min:0',
             'sackWeightKg' => 'exclude_unless:unit,sack|nullable|numeric|min:1',
         ]);
 
@@ -311,6 +321,7 @@ class InventoryController extends Controller
             'seedsPerCycle' => 'nullable|numeric|min:0',
             'daysToMaturity' => 'nullable|integer|min:0',
             'procurementSource' => 'required|in:DA,Farm Purchase',
+            'minStock' => 'nullable|numeric|min:0',
             'sackWeightKg' => 'exclude_unless:unit,sack|nullable|numeric|min:1',
         ]);
 
@@ -600,6 +611,7 @@ class InventoryController extends Controller
                 'action' => $daysElapsed > 1
                     ? "Auto daily consumption (catch-up x{$daysElapsed} days)"
                     : 'Auto daily consumption',
+                'type' => 'auto',
                 'quantity' => '-' . round($totalDeduction, 4) . ' ' . ($item['unit'] ?? 'pcs'),
                 'date' => $now->format('M d, Y H:i'),
             ];
@@ -720,6 +732,7 @@ class InventoryController extends Controller
             $history = $item['stockHistory'] ?? [];
             $history[] = [
                 'action' => 'Manual deduction',
+                'type' => 'manual',
                 'quantity' => '-' . $deductAmount . ' ' . $displayUnit,
                 'date' => (Carbon::now('Asia/Manila'))->format('M d, Y H:i'),
                 'notes' => $reason,
@@ -730,6 +743,21 @@ class InventoryController extends Controller
                 'stockHistory' => $history,
                 'lastStockUpdate' => Carbon::now('Asia/Manila'),
             ], ['merge' => true]);
+
+            // Seeds that can no longer cover a planting cycle get their own alert,
+            // so the next harvest is not discovered too late.
+            if (\App\Support\InventoryAlerts::isCritical(array_merge($item, ['currentStock' => $newStock]))) {
+                $this->firestore->collection('notifications')->newDocument()->set([
+                    'userId' => 'all',
+                    'title' => 'Critical Seed Stock',
+                    'message' => ($item['name'] ?? 'Seed') . " is critical ({$newStock} {$item['unit']} left)",
+                    'itemId' => $validated['itemId'],
+                    'itemName' => $item['name'] ?? '',
+                    'read' => false,
+                    'createdAt' => Carbon::now('Asia/Manila'),
+                    'type' => 'critical_stock',
+                ]);
+            }
 
             Cache::forget('inventory_list');
             Cache::forget('dashboard_stats');
@@ -748,6 +776,7 @@ class InventoryController extends Controller
         $validated = $request->validate([
             'itemId' => 'required|string',
             'quantity' => 'required|numeric|min:0.01',
+            'procurementSource' => 'nullable|in:DA,Farm Purchase',
             'notes' => 'nullable|string|max:255',
         ]);
 
@@ -763,11 +792,13 @@ class InventoryController extends Controller
             $newStock = $item['currentStock'] + $validated['quantity'];
 
             $history = $item['stockHistory'] ?? [];
+            $source = $validated['procurementSource'] ?? 'Farm Purchase';
             $history[] = [
-                'action' => 'Restock',
+                'action' => 'Restock — ' . $source,
+                'type' => 'restock',
                 'quantity' => '+' . $validated['quantity'] . ' ' . ($item['unit'] ?? ''),
                 'date' => (Carbon::now('Asia/Manila'))->format('M d, Y H:i'),
-                'notes' => $validated['notes'] ?? '',
+                'notes' => $source === 'DA' ? 'Provided by the DA' : 'Bought by the farm',
             ];
 
             $docRef->set([

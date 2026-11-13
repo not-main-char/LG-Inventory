@@ -6,6 +6,7 @@ use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\IncomeController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\PriceReferenceController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\SensorHistoryController;
 use App\Http\Controllers\FishpondController;
@@ -31,6 +32,9 @@ Route::middleware(['auth.firebase'])->group(function () {
     
     Route::get('/inventory', [InventoryController::class, 'index'])->name('inventory.index');
     Route::get('/inventory/harvest', [HarvestController::class, 'index'])->name('harvest.index');
+
+    // Price reference feeds the sales form, so every role can open it.
+    Route::get('/price-reference', [PriceReferenceController::class, 'index'])->name('price-reference.index');
     Route::get('/inventory/{id}/history', [InventoryController::class, 'stockHistory']);
     Route::get('/inventory/known-conversion', [InventoryController::class, 'knownConversion']); 
     
@@ -48,7 +52,6 @@ Route::middleware(['auth.firebase'])->group(function () {
 
         Route::post('/inventory/harvest', [HarvestController::class, 'store'])->name('harvest.store');
         Route::post('/inventory/harvest/dispose', [HarvestController::class, 'storeDisposal'])->name('harvest.dispose');
-        Route::post('/inventory/harvest/prices', [HarvestController::class, 'savePrice'])->name('harvest.price');
         Route::post('/inventory/harvest/{id}/archive', [HarvestController::class, 'archive'])->name('harvest.archive');
         Route::post('/inventory/harvest/disposals/{id}/archive', [HarvestController::class, 'archiveDisposal'])->name('harvest.disposal.archive');
     });
@@ -58,11 +61,14 @@ Route::middleware(['auth.firebase'])->group(function () {
     Route::get('/sensor-history/{device?}', [SensorHistoryController::class, 'index'])->name('sensor-history.index');
     Route::get('/sensor-history-data', [SensorHistoryController::class, 'summaryData']);
 
+    Route::get('/pond-monitoring', [FishpondController::class, 'ponds'])->name('pond.index');
     Route::get('/fish-monitoring/{device?}', [FishpondController::class, 'index'])->name('fishpond.index');
     Route::get('/fishpond-records', [FishpondController::class, 'records'])->name('fishpond.records');
 
     Route::middleware(['role:admin'])->group(function () {
         Route::post('/income', [IncomeController::class, 'store'])->name('income.store');
+        Route::get('/income/{id}/edit', [IncomeController::class, 'edit'])->name('income.edit');
+        Route::post('/income/{id}', [IncomeController::class, 'update'])->name('income.update');
         Route::post('/income/{id}/archive', [IncomeController::class, 'archive'])->name('income.archive');
         Route::post('/income/{id}/restore', [IncomeController::class, 'restore']) ->name('income.restore');
         Route::get('/income/archived', [IncomeController::class, 'archived'])->name('income.archived');
@@ -73,7 +79,6 @@ Route::middleware(['auth.firebase'])->group(function () {
         Route::post('/create-admin', [AdminController::class, 'store'])->name('create-admin');
         Route::get('/manage-admins', [AdminController::class, 'manage'])->name('admin.manage');
         Route::post('/manage-admins/{uid}/toggle', [AdminController::class, 'toggleDisable'])->name('admin.toggle');
-        Route::post('/notifications/{id}/restore', [NotificationController::class, 'restore']);
     });
     
     Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');
@@ -82,5 +87,4 @@ Route::middleware(['auth.firebase'])->group(function () {
 
     Route::get('/notifications', [NotificationController::class, 'index']);
     Route::post('/notifications/{id}/read', [NotificationController::class, 'markRead']);
-    Route::delete('/notifications/{id}', [NotificationController::class, 'destroy']);
 });

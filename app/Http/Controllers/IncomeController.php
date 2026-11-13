@@ -159,6 +159,7 @@ class IncomeController extends Controller
     {
         $v = $request->validate([
             'stockKey'        => 'required|string',
+            'saleUnit'        => 'nullable|in:kilos,pcs',
             'quantitySold'    => 'required|numeric|min:0.01',
             'saleType'        => 'required|in:wholesale,retail',
             'unitPrice'       => 'required|numeric|min:0',
@@ -168,12 +169,27 @@ class IncomeController extends Controller
             'notes'           => 'nullable|string|max:500',
         ]);
 
-        [$product, $unit] = array_pad(explode('|', $v['stockKey'], 2), 2, '');
+        // key = product|unit|growthStage — the stage is only set for fish, so a
+        // kilo of juvenile tilapia never draws from the adult batch.
+        [$product, $unit, $stage] = array_pad(explode('|', $v['stockKey']), 3, '');
+        $stage = trim((string) $stage);
         if ($product === '' || !in_array($unit, ['kilos', 'pcs'], true)) {
             return back()->withErrors(['stockKey' => 'Choose a product from the harvest stock.'])->withInput();
         }
 
-        $qty            = round((float) $v['quantitySold'], 4);
+        // Fish are stocked in kilos but fry and fingerlings are sold by the piece;
+        // a piece sale is converted at the batch's recorded weight per fish.
+        $saleUnit = $v['saleUnit'] ?? $unit;
+        if ($saleUnit === 'pcs' && $unit !== 'kilos') {
+            $saleUnit = $unit;
+        }
+
+        $qty = $saleUnit === 'pcs'
+            ? round((float) $v['quantitySold'])
+            : round((float) $v['quantitySold'], 4);
+        if ($qty <= 0) {
+            return back()->withErrors(['quantitySold' => 'Enter how many were sold.'])->withInput();
+        }
         $unitPrice      = round((float) $v['unitPrice'], 2);
         $discount       = round((float) $v['discountPercent'], 2);
         $finalUnitPrice = round($unitPrice * (1 - $discount / 100), 2);
@@ -186,7 +202,9 @@ class IncomeController extends Controller
         // Oldest harvest first (activeHarvests() is sorted by harvest date).
         $candidateIds = [];
         foreach ($harvestStock->activeHarvests() as $h) {
-            if ($h['product'] === $product && $h['unit'] === $unit && $h['remaining'] > 0.00001) {
+            $rowStage = ($h['kind'] ?? 'plant') === 'fish' ? trim((string) ($h['growthStage'] ?? '')) : '';
+            if (strcasecmp($h['product'], $product) === 0 && $h['unit'] === $unit
+                && strcasecmp($rowStage, $stage) === 0 && $h['remaining'] > 0.00001) {
                 $candidateIds[] = $h['id'];
             }
         }
@@ -198,7 +216,7 @@ class IncomeController extends Controller
         $user = $request->attributes->get('firebase_user');
 
         try {
-            $this->firestore->runTransaction(function (Transaction $t) use ($candidateIds, $qty, $product, $unit, $unitPrice, $discount, $finalUnitPrice, $total, $v, $date, $user) {
+            $this->firestore->runTransaction(function (Transaction $t) use ($candidateIds, $qty, $product, $saleUnit, $stage, $unitPrice, $discount, $finalUnitPrice, $total, $v, $date, $user) {
                 // Firestore transactions need every read before any write.
                 $batches = [];
                 foreach ($candidateIds as $hid) {
@@ -211,6 +229,7 @@ class IncomeController extends Controller
                 $updates = [];
                 $sources = [];
                 $kind = null;
+                $weightSold = 0.0;
 
                 foreach ($batches as $hid => [$ref, $snap]) {
                     if (!$snap->exists()) {
@@ -225,15 +244,39 @@ class IncomeController extends Controller
                         continue;
                     }
 
-                    $take = min($remaining, $need);
-                    $allocations[] = ['harvestId' => $hid, 'quantity' => round($take, 4)];
-                    $updates[] = [$ref, round($remaining - $take, 4)];
+                    if ($saleUnit === 'pcs') {
+                        // Pieces sold come off the batch at its recorded weight per
+                        // fish, so the kilos left stay correct.
+                        $fishCount = (int) ($h['fishCount'] ?? 0);
+                        $recorded  = (float) ($h['quantity'] ?? 0);
+                        if ($fishCount <= 0 || $recorded <= 0) {
+                            continue;
+                        }
+                        $kgPerPiece = $recorded / $fishCount;
+                        $piecesLeft = (int) floor($remaining / $kgPerPiece + 1e-9);
+                        if ($piecesLeft <= 0) {
+                            continue;
+                        }
+
+                        $take   = min($piecesLeft, $need);
+                        $takeKg = round($take * $kgPerPiece, 4);
+                        $allocations[] = ['harvestId' => $hid, 'quantity' => $take, 'unit' => 'pcs', 'weight' => $takeKg];
+                        $updates[] = [$ref, round($remaining - $takeKg, 4)];
+                        $weightSold = round($weightSold + $takeKg, 4);
+                        $need = round($need - $take, 4);
+                    } else {
+                        $take = min($remaining, $need);
+                        $allocations[] = ['harvestId' => $hid, 'quantity' => round($take, 4)];
+                        $updates[] = [$ref, round($remaining - $take, 4)];
+                        $weightSold = round($weightSold + $take, 4);
+                        $need = round($need - $take, 4);
+                    }
+
                     $kind ??= ($h['kind'] ?? 'plant');
                     if (!empty($h['source'])) {
                         $sources[$h['source']] = true;
                     }
 
-                    $need = round($need - $take, 4);
                     if ($need <= 0.00001) {
                         break;
                     }
@@ -241,7 +284,7 @@ class IncomeController extends Controller
 
                 if ($need > 0.00001) {
                     $available = round($qty - $need, 4);
-                    throw new \RuntimeException("Not enough stock. Only {$available} {$unit} of {$product} is available.");
+                    throw new \RuntimeException("Not enough stock. Only {$available} {$saleUnit} of {$product} is available.");
                 }
 
                 foreach ($updates as [$ref, $newRemaining]) {
@@ -253,7 +296,10 @@ class IncomeController extends Controller
                     'itemName'        => $product,
                     'type'            => $kind ?? 'plant',
                     'quantitySold'    => $qty,
-                    'unit'            => $unit,
+                    'unit'            => $saleUnit,
+                    // Kilos that actually left the batch, even when sold by piece.
+                    'weightSold'      => $weightSold,
+                    'growthStage'     => $stage !== '' ? $stage : null,
                     'saleAmount'      => $total,
                     'date'            => $date,
                     'season'          => $date->format('F Y'),
@@ -280,6 +326,146 @@ class IncomeController extends Controller
     }
 
     /** Archiving a sale puts its quantity back into the harvest batches it came from. */
+    /** Open a sale for correction, instead of voiding it and re-typing it. */
+    public function edit(string $id)
+    {
+        $snap = $this->firestore->collection('sales')->document($id)->snapshot();
+        abort_unless($snap->exists(), 404);
+
+        $sale = $snap->data();
+        abort_if(($sale['status'] ?? 'active') === 'archived', 404);
+
+        $rawDate = $sale['date'] ?? null;
+        $date = $rawDate instanceof \DateTimeInterface
+            ? Carbon::instance($rawDate)->setTimezone('Asia/Manila')->format('Y-m-d')
+            : (is_string($rawDate) ? Carbon::parse($rawDate)->format('Y-m-d') : Carbon::now('Asia/Manila')->format('Y-m-d'));
+
+        return view('income.edit', ['saleId' => $id, 'sale' => $sale, 'saleDate' => $date]);
+    }
+
+    /**
+     * Correct a sale that was typed wrong: the quantity difference is taken from
+     * (or returned to) the same harvest batches the sale was allocated from.
+     */
+    public function update(Request $request, string $id)
+    {
+        $v = $request->validate([
+            'quantitySold'    => 'required|numeric|min:0.01',
+            'unitPrice'       => 'required|numeric|min:0',
+            'discountPercent' => 'required|numeric|min:0|max:100',
+            'date'            => 'required|date',
+            'notes'           => 'nullable|string',
+        ]);
+
+        try {
+            $this->firestore->runTransaction(function (Transaction $t) use ($id, $v, $request) {
+                $saleRef  = $this->firestore->collection('sales')->document($id);
+                $saleSnap = $t->snapshot($saleRef);
+                if (!$saleSnap->exists()) {
+                    throw new \RuntimeException('Sale record not found.');
+                }
+
+                $sale = $saleSnap->data();
+                if (($sale['status'] ?? 'active') === 'archived') {
+                    throw new \RuntimeException('An archived sale cannot be edited.');
+                }
+
+                $unit    = strtolower(trim((string) ($sale['unit'] ?? $sale['saleUnit'] ?? '')));
+                $byPiece = in_array($unit, ['pcs', 'piece', 'pieces'], true);
+                $qty     = $byPiece ? round((float) $v['quantitySold']) : round((float) $v['quantitySold'], 4);
+                if ($qty <= 0) {
+                    throw new \RuntimeException('Enter how many were sold.');
+                }
+
+                $oldQty = (float) ($sale['quantitySold'] ?? 0);
+                $ratio  = $oldQty > 0 ? $qty / $oldQty : 1.0;
+                $allocs = (array) ($sale['allocations'] ?? []);
+
+                // Every read comes first; Firestore transactions require that.
+                $reads = [];
+                foreach ($allocs as $i => $a) {
+                    $ref = $this->firestore->collection('harvests')->document($a['harvestId']);
+                    $reads[$i] = [$ref, $t->snapshot($ref)];
+                }
+
+                $newAllocs   = [];
+                $writes      = [];
+                $left        = $qty;
+                $totalWeight = 0.0;
+                $count       = count($allocs);
+
+                foreach ($allocs as $i => $a) {
+                    [$ref, $snap] = $reads[$i];
+                    $oldAllocQty = (float) ($a['quantity'] ?? 0);
+                    $oldWeight   = $this->allocationWeight($a);
+                    $perUnit     = $oldAllocQty > 0 ? $oldWeight / $oldAllocQty : 1.0;
+
+                    // The last batch takes the rounding remainder so the parts add up.
+                    $newQty = $i === $count - 1 ? $left : round($oldAllocQty * $ratio, 4);
+                    if ($byPiece) {
+                        $newQty = (float) round($newQty);
+                    }
+                    $left = round($left - $newQty, 4);
+
+                    $newWeight   = round($newQty * $perUnit, 4);
+                    $deltaKg     = round($newWeight - $oldWeight, 4);
+                    $totalWeight = round($totalWeight + $newWeight, 4);
+
+                    if ($snap->exists() && $deltaKg != 0.0) {
+                        $remaining    = (float) ($snap->data()['remainingQuantity'] ?? 0);
+                        $newRemaining = round($remaining - $deltaKg, 4);
+                        if ($newRemaining < -0.0005) {
+                            $short = round(abs($newRemaining), 3);
+                            throw new \RuntimeException("Not enough stock for this correction. The batch is short by {$short} kilos, so lower the quantity.");
+                        }
+                        $writes[] = [$ref, max(0.0, $newRemaining)];
+                    }
+
+                    $row = ['harvestId' => $a['harvestId'], 'quantity' => $newQty];
+                    if (isset($a['unit'])) {
+                        $row['unit'] = $a['unit'];
+                    }
+                    if (isset($a['weight']) || $byPiece) {
+                        $row['weight'] = $newWeight;
+                    }
+                    $newAllocs[] = $row;
+                }
+
+                foreach ($writes as [$ref, $newRemaining]) {
+                    $t->set($ref, ['remainingQuantity' => $newRemaining], ['merge' => true]);
+                }
+
+                $unitPrice = round((float) $v['unitPrice'], 2);
+                $discount  = round((float) $v['discountPercent'], 2);
+                $finalUnit = round($unitPrice * (1 - $discount / 100), 2);
+
+                $changes = [
+                    'quantitySold'    => $qty,
+                    'unitPrice'       => $unitPrice,
+                    'discountPercent' => $discount,
+                    'finalUnitPrice'  => $finalUnit,
+                    'saleAmount'      => round($finalUnit * $qty, 2),
+                    'date'            => Carbon::parse($v['date']),
+                    'notes'           => $v['notes'] ?? '',
+                    'updatedAt'       => Carbon::now('Asia/Manila'),
+                    'updatedBy'       => $request->attributes->get('firebase_user'),
+                ];
+                if ($byPiece) {
+                    $changes['weightSold'] = $totalWeight;
+                }
+                if ($allocs) {
+                    $changes['allocations'] = $newAllocs;
+                }
+
+                $t->set($saleRef, $changes, ['merge' => true]);
+            });
+        } catch (\Throwable $e) {
+            return $this->fail($e);
+        }
+
+        return redirect()->route('income.index')->with('status', 'Sale corrected.');
+    }
+
     public function archive(string $id)
     {
         try {
@@ -298,7 +484,7 @@ class IncomeController extends Controller
                 $batches = [];
                 foreach (($sale['allocations'] ?? []) as $a) {
                     $ref = $this->firestore->collection('harvests')->document($a['harvestId']);
-                    $batches[] = [$ref, $t->snapshot($ref), (float) ($a['quantity'] ?? 0)];
+                    $batches[] = [$ref, $t->snapshot($ref), $this->allocationWeight($a)];
                 }
 
                 foreach ($batches as [$ref, $snap, $quantity]) {
@@ -338,7 +524,7 @@ class IncomeController extends Controller
                 $batches = [];
                 foreach (($sale['allocations'] ?? []) as $a) {
                     $ref = $this->firestore->collection('harvests')->document($a['harvestId']);
-                    $batches[] = [$ref, $t->snapshot($ref), (float) ($a['quantity'] ?? 0)];
+                    $batches[] = [$ref, $t->snapshot($ref), $this->allocationWeight($a)];
                 }
 
                 $updates = [];
@@ -376,6 +562,19 @@ class IncomeController extends Controller
         Cache::forget('income_chart_data');
         Cache::forget('dashboard_stats');
         Cache::forget('sales_chart_data');
+    }
+
+    /**
+     * Kilos an allocation took off a batch. A piece sale stores the weight it
+     * used, because its `quantity` is a count of fish, not kilos.
+     */
+    protected function allocationWeight(array $allocation): float
+    {
+        if (isset($allocation['weight']) && is_numeric($allocation['weight'])) {
+            return (float) $allocation['weight'];
+        }
+
+        return (float) ($allocation['quantity'] ?? 0);
     }
 
     protected function fail(\Throwable $e)
