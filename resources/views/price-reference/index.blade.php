@@ -6,7 +6,8 @@
     $money = fn ($n) => $n === null ? '—' : '₱' . number_format((float) $n, 2);
     $sourceBadge = function (array $p) {
         if (!empty($p['saved'])) {
-            return ['Farm price', '#8a5a1e', '#fdf1dc'];
+            $label = $p['source'] ?? '';
+            return [$label !== '' ? $label : 'Farm price', '#8a5a1e', '#fdf1dc'];
         }
         if (!empty($p['own'])) {
             return ['PSA', '#2f5d3a', '#e6f1e6'];
@@ -24,6 +25,18 @@
 <div class="mb-4">
     <h3 class="font-display text-base font-semibold" style="color:var(--color-ink-900)">Price Reference</h3>
 </div>
+
+@if(session('status'))
+    <div class="ledger-card p-4 mb-4 text-sm" style="color:var(--color-forest-700); border-color:var(--color-forest-600)">
+        {{ session('status') }}
+    </div>
+@endif
+
+@if($errors->any())
+    <div class="ledger-card p-4 mb-4 text-sm" style="color:var(--color-rust-600); border-color:var(--color-rust-600)">
+        {{ $errors->first() }}
+    </div>
+@endif
 
 {{-- Tabs --}}
 <div class="flex gap-2 p-1 bg-[#EFE9D8] rounded-xl w-fit mb-6 flex-wrap" id="priceTabs">
@@ -203,5 +216,6 @@
         b.addEventListener('click', () => filterKind(b.dataset.kind));
     });
     filterKind('all');
+
 </script>
 @endpush

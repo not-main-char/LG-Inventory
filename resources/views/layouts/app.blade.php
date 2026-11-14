@@ -154,8 +154,11 @@
 
                             <div id="notifPanel" class="hidden absolute right-0 mt-2 w-80 notif-panel z-30 overflow-hidden">
                                 <div class="px-4 py-3 flex items-center justify-between border-b border-[#F1ECDC]">
-                                    <span class="font-display font-semibold text-sm" style="color:var(--color-ink-900)">Notifications</span>
-                                    <span id="notifCountLabel" class="text-xs text-gray-400">0 new</span>
+                                    <div class="flex items-baseline gap-2">
+                                        <span class="font-display font-semibold text-sm" style="color:var(--color-ink-900)">Notifications</span>
+                                        <span id="notifCountLabel" class="text-xs text-gray-400">0 new</span>
+                                    </div>
+                                    <button type="button" id="notifMarkAll" class="text-[11px] font-semibold hover:underline hidden" style="color:var(--color-forest-700)">Mark all read</button>
                                 </div>
                                 <div id="notifList" class="max-h-80 overflow-y-auto divide-y divide-[#F1ECDC]">
                                     <p class="text-sm text-gray-400 px-4 py-6 text-center">Loading…</p>
@@ -203,6 +206,14 @@
             return { low_stock: '#AE4332', harvest: '#C2862C', account_created: '#29677D' }[type] || '#356B45';
         }
 
+        function notifEscape(value) {
+            return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+            });
+        }
+
+        const NOTIF_LABEL = { low_stock: 'Low stock', critical_stock: 'Critical', harvest: 'Harvest', account_created: 'Account' };
+
         async function loadNotifications() {
             const badge = document.getElementById('notifBadge');
             if (!badge) return;
@@ -213,7 +224,7 @@
                 const unread = notifs.filter(n => !n.read);
 
                 if (unread.length > 0) {
-                    badge.innerText = unread.length;
+                    badge.innerText = unread.length > 9 ? '9+' : unread.length;
                     badge.classList.remove('hidden');
                 } else {
                     badge.classList.add('hidden');
@@ -223,17 +234,30 @@
                 const countLabel = document.getElementById('notifCountLabel');
                 if (countLabel) countLabel.innerText = unread.length + ' new';
 
+                const markAll = document.getElementById('notifMarkAll');
+                if (markAll) {
+                    markAll.classList.toggle('hidden', unread.length === 0);
+                    markAll.dataset.ids = unread.map(n => n.id).join(',');
+                }
+
                 if (list) {
                     if (notifs.length === 0) {
                         list.innerHTML = '<p class="text-sm text-gray-400 px-4 py-6 text-center">No notifications yet.</p>';
                     } else {
-                        list.innerHTML = notifs.map(n => `
-                            <div class="notif-item px-4 py-3 flex gap-3 ${n.read ? 'opacity-60' : ''} cursor-pointer hover:bg-[#FBF9F1]" onclick="markNotifRead('${n.id}')">
+                        // Newest unread first, then read ones.
+                        const ordered = notifs.slice().sort((a, b) => Number(a.read) - Number(b.read));
+                        list.innerHTML = ordered.map(n => `
+                            <div class="notif-item px-4 py-3 flex gap-3 ${n.read ? 'opacity-60' : 'bg-[#FBF9F1]'} cursor-pointer hover:bg-[#F5F1E2]" onclick="markNotifRead('${n.id}')">
                                 <span class="notif-dot mt-1.5 flex-shrink-0" style="background:${timeColor(n.type)}"></span>
                                 <div class="flex-1 min-w-0">
-                                    <p class="text-sm font-semibold text-gray-800">${n.title}</p>
-                                    <p class="text-xs text-gray-500 mt-0.5">${n.message}</p>
-                                    <p class="text-[11px] text-gray-400 mt-1">${n.createdAt}</p>
+                                    <div class="flex items-start justify-between gap-2">
+                                        <p class="text-sm font-semibold text-gray-800">${notifEscape(n.title)}</p>
+                                        ${n.read ? '' : '<span class="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded text-white flex-shrink-0" style="background:' + timeColor(n.type) + '">New</span>'}
+                                    </div>
+                                    <p class="text-xs text-gray-500 mt-0.5">${notifEscape(n.message)}</p>
+                                    <p class="text-[11px] text-gray-400 mt-1">${notifEscape(n.createdAt)}
+                                        <span class="ml-1 uppercase tracking-wide text-[9px] font-semibold" style="color:${timeColor(n.type)}">${NOTIF_LABEL[n.type] || 'Alert'}</span>
+                                    </p>
                                 </div>
                             </div>
                         `).join('');
@@ -254,6 +278,18 @@
             loadNotifications();
         }
 
+        async function markAllNotifRead() {
+            const btn = document.getElementById('notifMarkAll');
+            const ids = (btn && btn.dataset.ids ? btn.dataset.ids.split(',') : []).filter(Boolean);
+            if (!ids.length) return;
+            btn.disabled = true;
+            await Promise.all(ids.map(id => fetch(`/notifications/${id}/read`, {
+                method: 'POST', headers: { 'X-CSRF-TOKEN': '{{ csrf_token() }}' }
+            })));
+            btn.disabled = false;
+            loadNotifications();
+        }
+
         if (document.getElementById('notifBadge')) {
             const bell = document.getElementById('notificationBell');
             const panel = document.getElementById('notifPanel');
@@ -263,6 +299,11 @@
                 panel.classList.toggle('hidden');
                 loadNotifications();
             });
+            document.getElementById('notifMarkAll')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                markAllNotifRead();
+            });
+            panel?.addEventListener('click', (e) => e.stopPropagation());
             document.addEventListener('click', (e) => {
                 if (panel && !panel.contains(e.target) && e.target !== bell) panel.classList.add('hidden');
             });

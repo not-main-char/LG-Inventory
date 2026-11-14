@@ -19,6 +19,14 @@ class DashboardController extends Controller
     
     public function index()
     {
+        // Same low-stock sync as the inventory page, so opening the dashboard is
+        // enough to make the bell match the badges.
+        try {
+            \App\Support\LowStockNotifier::sync($this->firestore);
+        } catch (\Throwable $e) {
+            \Log::error('Low stock notification sync failed: ' . $e->getMessage());
+        }
+
         $stats = Cache::remember('dashboard_stats', 300, function () {
             $now = Carbon::now('Asia/Manila');
             $currentMonthStart = $now->clone()->startOfMonth();

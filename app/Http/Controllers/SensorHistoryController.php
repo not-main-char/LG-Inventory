@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\FishStock;
+use App\Support\SensorReadings;
 use Kreait\Firebase\Contract\Database;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -10,13 +12,7 @@ use Illuminate\Support\Facades\Cache;
 class SensorHistoryController extends Controller
 {
     protected Database $database;
-
-    // Devices pulled from the RTDB `devices` node.
-    // If HYDROLG002 has a different real-world name, just change it here.
-    protected array $devices = [
-        'HYDROLG001' => 'Aquaponics 1',
-        'HYDROLG002' => 'Aquaponics 2',
-    ];
+    protected FishStock $stock;
 
     // Fields as they appear on each devices/{id}/sensor_history/{pushKey} record.
     //
@@ -67,19 +63,22 @@ class SensorHistoryController extends Controller
         ],
     ];
 
-    public function __construct(Database $database)
+    public function __construct(Database $database, FishStock $stock)
     {
         $this->database = $database;
+        $this->stock    = $stock;
     }
 
     public function index(string $device = 'HYDROLG001')
     {
-        if (!array_key_exists($device, $this->devices)) {
+        $devices = $this->stock->devices();
+
+        if (!array_key_exists($device, $devices)) {
             $device = 'HYDROLG001';
         }
 
         return view('sensor-history.index', [
-            'devices'      => $this->devices,
+            'devices'      => $devices,
             'sensors'      => $this->sensors,
             'activeDevice' => $device,
         ]);
@@ -95,7 +94,7 @@ class SensorHistoryController extends Controller
             ? $request->get('range')
             : 'day';
 
-        if (!array_key_exists($device, $this->devices)) {
+        if (!array_key_exists($device, $this->stock->devices())) {
             $device = 'HYDROLG001';
         }
 
@@ -124,6 +123,44 @@ class SensorHistoryController extends Controller
         $result['next_date']   = $this->shift($range, $anchor, 1)->format('Y-m-d');
 
         return response()->json($result);
+    }
+
+    /**
+     * AJAX endpoint: /sensor-history-days?device=HYDROLG001&month=Y-m
+     * Which days of that month actually have readings, and how many.
+     */
+    public function daysData(Request $request)
+    {
+        $device = $request->get('device', 'HYDROLG001');
+        if (!array_key_exists($device, $this->stock->devices())) {
+            $device = 'HYDROLG001';
+        }
+
+        $month = (string) $request->get('month', '');
+        if (!preg_match('/^\d{4}-\d{2}$/', $month)) {
+            $month = Carbon::now('Asia/Manila')->format('Y-m');
+        }
+
+        $days = Cache::remember("sensor_days_{$device}_{$month}", 300, function () use ($device, $month) {
+            $all = $this->database->getReference("devices/{$device}/sensor_history")->getValue();
+            $counts = [];
+            foreach ((array) $all as $reading) {
+                if (!is_array($reading)) {
+                    continue;
+                }
+                $time = $this->readingTime($reading);
+                if (!$time || $time->format('Y-m') !== $month) {
+                    continue;
+                }
+                $day = $time->format('Y-m-d');
+                $counts[$day] = ($counts[$day] ?? 0) + 1;
+            }
+            ksort($counts);
+
+            return $counts;
+        });
+
+        return response()->json(['month' => $month, 'days' => $days]);
     }
 
     protected function rangeBounds(string $range, Carbon $anchor): array
@@ -364,18 +401,6 @@ class SensorHistoryController extends Controller
 
     protected function readingTime(array $reading): ?Carbon
     {
-        if (!empty($reading['dateTime'])) {
-            try {
-                return Carbon::parse($reading['dateTime'], 'Asia/Manila');
-            } catch (\Throwable $e) {
-                // fall through to timestamp
-            }
-        }
-
-        if (!empty($reading['timestamp'])) {
-            return Carbon::createFromTimestampMs($reading['timestamp'], 'Asia/Manila');
-        }
-
-        return null;
+        return SensorReadings::at($reading);
     }
 }

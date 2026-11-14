@@ -54,12 +54,14 @@ Route::middleware(['auth.firebase'])->group(function () {
         Route::post('/inventory/harvest/dispose', [HarvestController::class, 'storeDisposal'])->name('harvest.dispose');
         Route::post('/inventory/harvest/{id}/archive', [HarvestController::class, 'archive'])->name('harvest.archive');
         Route::post('/inventory/harvest/disposals/{id}/archive', [HarvestController::class, 'archiveDisposal'])->name('harvest.disposal.archive');
+
     });
     
     Route::get('/income', [IncomeController::class, 'index'])->name('income.index');
     Route::get('/income-chart-data', [IncomeController::class, 'chartData']);
     Route::get('/sensor-history/{device?}', [SensorHistoryController::class, 'index'])->name('sensor-history.index');
     Route::get('/sensor-history-data', [SensorHistoryController::class, 'summaryData']);
+    Route::get('/sensor-history-days', [SensorHistoryController::class, 'daysData']);
 
     Route::get('/pond-monitoring', [FishpondController::class, 'ponds'])->name('pond.index');
     Route::get('/fish-monitoring/{device?}', [FishpondController::class, 'index'])->name('fishpond.index');
@@ -84,6 +86,8 @@ Route::middleware(['auth.firebase'])->group(function () {
     Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');
     Route::get('/reports/inventory/{format}', [ReportController::class, 'downloadInventory'])->name('reports.inventory');
     Route::get('/reports/sales/{format}', [ReportController::class, 'downloadSales'])->name('reports.sales');
+    Route::get('/reports/harvest/{format}', [ReportController::class, 'downloadHarvest'])->name('reports.harvest');
+    Route::get('/reports/sensors/{format}', [ReportController::class, 'downloadSensors'])->name('reports.sensors');
 
     Route::get('/notifications', [NotificationController::class, 'index']);
     Route::post('/notifications/{id}/read', [NotificationController::class, 'markRead']);

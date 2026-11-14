@@ -21,11 +21,17 @@ use Kreait\Firebase\Contract\Firestore;
  */
 class FishStock
 {
-    /** Same devices as Fish Monitoring and Sensor History. */
+    /**
+     * Names for the devices we know. Used as the label fallback; the list of
+     * devices itself is read from `devices` so a new unit needs no code change.
+     */
     public const DEVICES = [
         'HYDROLG001' => 'Aquaponics 1',
         'HYDROLG002' => 'Aquaponics 2',
     ];
+
+    /** How long the discovered device list is cached, in seconds. */
+    protected const DEVICE_CACHE_SECONDS = 120;
 
     protected $db;
     protected $rtdb;
@@ -41,11 +47,78 @@ class FishStock
      *
      * @return array{batches: array, error: ?string}
      */
+    /**
+     * Every device that has written to `devices`, with the name it reports.
+     *
+     * A new HydroSolar unit shows up here as soon as it writes anything, which
+     * is why the pond page, Sensor History and the sensor report all use this
+     * instead of a typed-in list.
+     *
+     * @return array<string, string> device id => label
+     */
+    public function devices(bool $fresh = false): array
+    {
+        $read = function () {
+            $devices = [];
+
+            try {
+                $ids = $this->rtdb->getReference('devices')->getChildKeys();
+            } catch (\Throwable $e) {
+                \Log::warning('Device list could not be read: ' . $e->getMessage());
+
+                return self::DEVICES;
+            }
+
+            foreach ($ids as $id) {
+                $label = self::DEVICES[$id] ?? '';
+
+                if ($label === '') {
+                    $label = $this->reportedName($id);
+                }
+
+                $devices[$id] = $label;
+            }
+
+            ksort($devices);
+
+            return $devices !== [] ? $devices : self::DEVICES;
+        };
+
+        if ($fresh) {
+            return $read();
+        }
+
+        return \Illuminate\Support\Facades\Cache::remember('rtdb_devices', self::DEVICE_CACHE_SECONDS, $read);
+    }
+
+    /** The name a device calls itself, or a readable fallback from its id. */
+    protected function reportedName(string $id): string
+    {
+        foreach (["devices/{$id}", "devices/{$id}/sensor"] as $path) {
+            try {
+                $node = $this->rtdb->getReference($path)->getValue();
+            } catch (\Throwable $e) {
+                $node = null;
+            }
+
+            if (is_array($node) && !empty($node['deviceName'])) {
+                return (string) $node['deviceName'];
+            }
+        }
+
+        // HYDROLG003 -> Aquaponics 3, so a new unit still reads properly.
+        if (preg_match('/(\d+)$/', $id, $m)) {
+            return 'Aquaponics ' . (int) $m[1];
+        }
+
+        return $id;
+    }
+
     public function batches(): array
     {
         $batches = [];
 
-        foreach (self::DEVICES as $device => $label) {
+        foreach ($this->devices() as $device => $label) {
             try {
                 $raw = $this->rtdb->getReference("devices/{$device}/fishpond_records")->getValue();
             } catch (\Throwable $e) {

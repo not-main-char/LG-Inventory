@@ -2,11 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\FishStock;
+use App\Support\SensorReadings;
 use Carbon\Carbon;
 use Dompdf\Dompdf;
 use Dompdf\Options;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\URL;
+use Kreait\Firebase\Contract\Database;
 use Kreait\Firebase\Contract\Firestore;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
@@ -14,17 +17,34 @@ use SimpleSoftwareIO\QrCode\Facades\QrCode;
 
 class ReportController extends Controller
 {
-    protected $firestore;
+    /** Report types the user can export. */
+    public const TYPES = [
+        'inventory' => 'Inventory',
+        'sales'     => 'Sales',
+        'harvest'   => 'Harvest records',
+        'sensors'   => 'Sensor history',
+    ];
 
-    public function __construct(Firestore $firestore)
+    public const REPORT_NAMES = [
+        'inventory' => 'Inventory Report',
+        'sales'     => 'Sales Report',
+        'harvest'   => 'Harvest Report',
+        'sensors'   => 'Sensor History Report',
+    ];
+
+    protected $firestore;
+    protected $rtdb;
+
+    public function __construct(Firestore $firestore, Database $rtdb)
     {
         $this->firestore = $firestore->database();
+        $this->rtdb = $rtdb;
     }
 
     public function index(Request $request)
     {
         $month = $this->validatedMonth($request->query('month'));
-        $type = in_array($request->query('type'), ['inventory', 'sales'], true) ? $request->query('type') : null;
+        $type = array_key_exists((string) $request->query('type'), self::TYPES) ? $request->query('type') : null;
         $format = in_array($request->query('format'), ['xlsx', 'pdf'], true) ? $request->query('format') : null;
         $qrCode = null;
         $downloadUrl = null;
@@ -34,12 +54,12 @@ class ReportController extends Controller
         $validationMessage = null;
 
         if ($type && $format) {
-            $rows = $type === 'inventory' ? $this->inventoryRows($month) : $this->salesRows($month);
+            $rows = $this->rowsFor($type, $month);
             $hasData = count($rows) > 0;
             if (!$hasData) {
-                $validationMessage = 'There is no ' . ($type === 'inventory' ? 'inventory' : 'sales') . ' data for ' . Carbon::createFromFormat('Y-m', $month)->format('F Y') . '. Choose a month that contains data.';
+                $validationMessage = 'There is no ' . strtolower(self::TYPES[$type]) . ' data for ' . Carbon::createFromFormat('Y-m', $month)->format('F Y') . '. Choose a month that contains data.';
             } else {
-                $downloadRoute = $type === 'inventory' ? 'reports.inventory' : 'reports.sales';
+                $downloadRoute = 'reports.' . $type;
                 $downloadUrl = route($downloadRoute, ['format' => $format, 'month' => $month]);
                 $expiresAt = now()->addDays(7);
                 $shareUrl = URL::temporarySignedRoute('reports.share', $expiresAt, [
@@ -47,7 +67,7 @@ class ReportController extends Controller
                     'format' => $format,
                     'month' => $month,
                 ]);
-                $reportLabel = ucfirst($type) . ' Report — ' . Carbon::createFromFormat('Y-m', $month)->format('F Y') . ' — ' . strtoupper($format === 'xlsx' ? 'Excel' : 'PDF');
+                $reportLabel = self::REPORT_NAMES[$type] . ' — ' . Carbon::createFromFormat('Y-m', $month)->format('F Y') . ' — ' . strtoupper($format === 'xlsx' ? 'Excel' : 'PDF');
                 $qrCode = base64_encode($this->labeledQrPng($shareUrl, $reportLabel, $expiresAt));
             }
         }
@@ -57,7 +77,7 @@ class ReportController extends Controller
 
     public function share(Request $request, string $type, string $format)
     {
-        abort_unless(in_array($type, ['inventory', 'sales'], true), 404);
+        abort_unless(array_key_exists($type, self::TYPES), 404);
         abort_unless(in_array($format, ['xlsx', 'pdf'], true), 404);
 
         $month = $this->validatedMonth($request->query('month'));
@@ -74,34 +94,127 @@ class ReportController extends Controller
             'month' => $month,
             'downloadUrl' => $downloadUrl,
             'expiresAt' => $expiresAt,
-            'reportLabel' => ucfirst($type) . ' Report — ' . Carbon::createFromFormat('Y-m', $month)->format('F Y') . ' — ' . strtoupper($format === 'xlsx' ? 'Excel' : 'PDF'),
+            'reportLabel' => self::REPORT_NAMES[$type] . ' — ' . Carbon::createFromFormat('Y-m', $month)->format('F Y') . ' — ' . strtoupper($format === 'xlsx' ? 'Excel' : 'PDF'),
         ]);
     }
 
     public function sharedDownload(Request $request, string $type, string $format)
     {
-        abort_unless(in_array($type, ['inventory', 'sales'], true), 404);
+        abort_unless(array_key_exists($type, self::TYPES), 404);
         abort_unless(in_array($format, ['xlsx', 'pdf'], true), 404);
 
-        return $type === 'inventory'
-            ? $this->downloadInventory($request, $format)
-            : $this->downloadSales($request, $format);
+        return $this->monthReport($type, $request, $format);
+    }
+
+    /** One month of one report type, in the chosen file format. */
+    protected function monthReport(string $type, Request $request, string $format)
+    {
+        $month = $this->validatedMonth($request->query('month'));
+        $title = self::REPORT_NAMES[$type] . ' - ' . Carbon::createFromFormat('Y-m', $month)->format('F Y');
+
+        return $this->download($this->rowsFor($type, $month), $title, $type . '-report-' . $month, $format);
+    }
+
+    protected function rowsFor(string $type, string $month): array
+    {
+        return match ($type) {
+            'harvest' => $this->harvestRows($month),
+            'sensors' => $this->sensorRows($month),
+            'sales'   => $this->salesRows($month),
+            default   => $this->inventoryRows($month),
+        };
+    }
+
+    public function downloadHarvest(Request $request, string $format)
+    {
+        return $this->monthReport('harvest', $request, $format);
+    }
+
+    public function downloadSensors(Request $request, string $format)
+    {
+        return $this->monthReport('sensors', $request, $format);
+    }
+
+    /** Harvest records of one month: what was stocked or harvested, and how much is left. */
+    protected function harvestRows(string $month): array
+    {
+        $rows = [];
+        foreach ($this->firestore->collection('harvests')->documents() as $document) {
+            $data = $document->data();
+            if (($data['status'] ?? 'active') === 'archived') continue;
+
+            $date = $this->dateValue($data['harvestDate'] ?? null)
+                ?? $this->dateValue($data['createdAt'] ?? null);
+            if (!$date || $date->format('Y-m') !== $month) continue;
+
+            $rows[] = [
+                $data['product'] ?? '',
+                $data['kind'] ?? '',
+                $data['growthStage'] ?? '',
+                $data['batch'] ?? '',
+                (float) ($data['quantity'] ?? 0),
+                (float) ($data['remainingQuantity'] ?? 0),
+                $data['unit'] ?? '',
+                $date->format('Y-m-d'),
+                $data['source'] ?? '',
+                $data['notes'] ?? '',
+            ];
+        }
+
+        usort($rows, fn ($a, $b) => strcmp((string) $b[7], (string) $a[7]));
+        return $rows;
+    }
+
+    /** One row per day that has readings, averaged per sensor. */
+    protected function sensorRows(string $month): array
+    {
+        $rows = [];
+
+        foreach (app(FishStock::class)->devices() as $device => $label) {
+            $all = $this->rtdb->getReference("devices/{$device}/sensor_history")->getValue();
+            if (!is_array($all)) continue;
+
+            // day => [readings, per-sensor sum, per-sensor count]
+            $days = [];
+            foreach ($all as $reading) {
+                if (!is_array($reading)) continue;
+                $stamp = SensorReadings::at($reading);
+                if (!$stamp || $stamp->format('Y-m') !== $month) continue;
+
+                $day = $stamp->format('Y-m-d');
+                $days[$day] ??= ['count' => 0, 'sum' => [], 'seen' => []];
+                $days[$day]['count']++;
+
+                foreach (SensorReadings::COLUMNS as $key) {
+                    if (!is_numeric($reading[$key] ?? null)) continue;
+                    $days[$day]['sum'][$key] = ($days[$day]['sum'][$key] ?? 0) + (float) $reading[$key];
+                    $days[$day]['seen'][$key] = ($days[$day]['seen'][$key] ?? 0) + 1;
+                }
+            }
+
+            ksort($days);
+            foreach ($days as $day => $info) {
+                $row = [$label, $day, $info['count']];
+                foreach (SensorReadings::COLUMNS as $key) {
+                    $row[] = isset($info['seen'][$key])
+                        ? round($info['sum'][$key] / $info['seen'][$key], 2)
+                        : null;
+                }
+                $rows[] = $row;
+            }
+        }
+
+        return $rows;
     }
 
     public function downloadInventory(Request $request, string $format)
     {
-        $month = $this->validatedMonth($request->query('month'));
-        $rows = $this->inventoryRows($month);
-        $title = 'Inventory Report - ' . Carbon::createFromFormat('Y-m', $month)->format('F Y');
-        return $this->download($rows, $title, 'inventory-report-' . $month, $format);
+        return $this->monthReport('inventory', $request, $format);
     }
 
     public function downloadSales(Request $request, string $format)
     {
-        $month = $this->validatedMonth($request->query('month'));
-        $rows = $this->salesRows($month);
-        $title = 'Sales Report - ' . Carbon::createFromFormat('Y-m', $month)->format('F Y');
-        return $this->download($rows, $title, 'sales-report-' . $month, $format);
+        return $this->monthReport('sales', $request, $format);
     }
 
     protected function validatedMonth(?string $month): string
@@ -285,9 +398,13 @@ class ReportController extends Controller
     protected function download(array $rows, string $title, string $filename, string $format)
     {
         $format = strtolower($format);
-        $headers = str_contains(strtolower($title), 'inventory')
-            ? ['Item Name', 'Type', 'Stock Unit', 'Quantity in Stock', 'Stock Type', 'Monthly Restocked', 'Monthly Consumption', 'Procurement Source', 'Last Stock Update']
-            : ['Item Name', 'Type', 'Quantity Sold', 'Unit Sold', 'Weight (kg)', 'Income (PHP)', 'Date of Sale', 'Notes'];
+        $lower = strtolower($title);
+        $headers = match (true) {
+            str_contains($lower, 'inventory') => ['Item Name', 'Type', 'Stock Unit', 'Quantity in Stock', 'Stock Type', 'Monthly Restocked', 'Monthly Consumption', 'Procurement Source', 'Last Stock Update'],
+            str_contains($lower, 'harvest')   => ['Item Name', 'Type', 'Growth Stage', 'Batch', 'Quantity', 'Remaining', 'Unit', 'Harvest Date', 'Source', 'Notes'],
+            str_contains($lower, 'sensor')    => ['Pond', 'Date', 'Readings', 'Air Temp (°C)', 'Water Temp (°C)', 'Turbidity (%)', 'Humidity (%)', 'pH', 'Water Level (%)'],
+            default => ['Item Name', 'Type', 'Quantity Sold', 'Unit Sold', 'Weight (kg)', 'Income (PHP)', 'Date of Sale', 'Notes'],
+        };
         abort_unless(in_array($format, ['xlsx', 'pdf'], true), 404);
 
         // Totals are kept per unit: a kilo total and a piece total are different

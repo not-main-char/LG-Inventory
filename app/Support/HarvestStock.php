@@ -26,9 +26,9 @@ class HarvestStock
     }
 
     /** Document id used for a product's row in the price_reference collection. */
-    public static function priceId(string $product, string $unit): string
+    public static function priceId(string $product, string $unit, string $stage = ''): string
     {
-        return Str::slug($product . ' ' . $unit);
+        return Str::slug(trim($product . ' ' . $unit . ' ' . $stage));
     }
 
     /** Active (not archived) harvest batches, oldest harvest first. */
@@ -136,9 +136,13 @@ class HarvestStock
                 'piecesPerKg'    => isset($d['piecesPerKg']) ? (float) $d['piecesPerKg'] : null,
                 'note'           => $d['note'] ?? '',
                 'updatedOn'      => $d['updatedOn'] ?? '',
+                'stage'          => (string) ($d['stage'] ?? ''),
+                'kind'           => (string) ($d['kind'] ?? ''),
+                'source'         => (string) ($d['source'] ?? ''),
+                'effectiveOn'    => (string) ($d['effectiveOn'] ?? ''),
             ];
         }
-        uasort($rows, fn ($a, $b) => strcmp($a['product'] . $a['unit'], $b['product'] . $b['unit']));
+        uasort($rows, fn ($a, $b) => strcmp($a['product'] . $a['unit'] . ($a['stage'] ?? ''), $b['product'] . $b['unit'] . ($b['stage'] ?? '')));
 
         return $rows;
     }
@@ -161,17 +165,14 @@ class HarvestStock
                 'saved'     => true,
                 'stage'     => '',
                 'seed'      => false,
-                'kind'      => $this->kindOf($row['product'], $harvests),
+                'kind'      => ($row['kind'] ?? '') !== '' ? $row['kind'] : $this->kindOf($row['product'], $harvests),
             ];
         }
 
         // Every fish stage now has its own price, so the list follows the same
         // rows the sale form offers instead of one row per product name.
         foreach ($this->availableProducts($harvests, $prices) as $a) {
-            $id = self::priceId($a['product'], $a['unit']);
-            if ($a['stage'] !== '') {
-                $id .= '|' . $a['stage'];
-            }
+            $id = self::priceId($a['product'], $a['unit'], $a['stage']);
             if (isset($rows[$id])) {
                 continue; // an admin price already applies
             }
@@ -244,14 +245,14 @@ class HarvestStock
         }
 
         foreach ($groups as $key => $g) {
-            $ref = $this->referenceFor($g['product'], $g['unit'], $prices, $g['stage']);
+            $ref = $this->referenceFor($g['product'], $g['unit'], $prices, $g['stage'], $g['kind']);
 
             // Nursery fish (fry, fingerlings, juveniles) are sold by the piece at
             // the published hatchery rate, so the sale form can offer both units.
             $piecePrice = null;
             $pieceNote  = '';
             if (($g['kind'] ?? '') === 'fish' && $g['stage'] !== '') {
-                $piece = $this->referenceFor($g['product'], 'pcs', $prices, $g['stage']);
+                $piece = $this->referenceFor($g['product'], 'pcs', $prices, $g['stage'], $g['kind']);
                 if ($piece['price'] !== null && $piece['priceSeed']) {
                     $piecePrice = $piece['price'];
                     $pieceNote  = $piece['priceNote'];
@@ -329,7 +330,7 @@ class HarvestStock
      * answers from the DA Region I list, and for a crop nobody publishes it
      * returns a clearly-marked estimate instead of leaving the box empty.
      */
-    protected function referenceFor(string $product, string $unit, array $prices, string $stage = ''): array
+    protected function referenceFor(string $product, string $unit, array $prices, string $stage = '', string $kind = ''): array
     {
         $empty = [
             'price'          => null,
@@ -338,13 +339,16 @@ class HarvestStock
             'ceiling'        => null,
             'piecesPerKg'    => null,
             'priceNote'      => '',
+            'priceSource'    => '',
             'priceUpdatedOn' => null,
             'priceEstimated' => false,
             'priceOwnSource' => false,
             'priceSeed'      => false,
         ];
 
-        $saved = $prices[self::priceId($product, $unit)] ?? null;
+        $saved = $prices[self::priceId($product, $unit, $stage)]
+            ?? $prices[self::priceId($product, $unit)]
+            ?? null;
         if ($saved && ($saved['retailPrice'] ?? 0) > 0) {
             return [
                 'price'          => $saved['retailPrice'],
@@ -353,6 +357,7 @@ class HarvestStock
                 'ceiling'        => $saved['ceilingPrice'],
                 'piecesPerKg'    => $saved['piecesPerKg'],
                 'priceNote'      => $saved['note'],
+                'priceSource'    => $saved['source'] ?? '',
                 'priceUpdatedOn' => $saved['updatedOn'],
                 'priceEstimated' => false,
                 'priceOwnSource' => false,
@@ -360,7 +365,7 @@ class HarvestStock
             ];
         }
 
-        $ref = $this->book->resolve($product, $unit, $stage);
+        $ref = $this->book->resolve($product, $unit, $stage, $kind);
         if (!$ref) {
             return $empty;
         }

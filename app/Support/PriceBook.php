@@ -4,6 +4,7 @@ namespace App\Support;
 
 use Carbon\Carbon;
 use Kreait\Firebase\Contract\Firestore;
+use Illuminate\Support\Str;
 
 /**
  * The price book: what a kilo or a piece of something should sell for, and
@@ -92,6 +93,10 @@ class PriceBook
     ];
 
     protected const BASE = 'http://www.bantaypresyo.da.gov.ph';
+
+    /** Long-lived workers keep static state; prices must not go stale with them. */
+    protected const MEMO_SECONDS = 30;
+    protected static $memoAt = 0;
 
     /** How long an imported list is trusted before we refetch it. */
     protected const FRESH_FOR_MINUTES = 720;
@@ -249,7 +254,7 @@ class PriceBook
      */
     public function load(bool $refreshIfStale = false): ?array
     {
-        if (static::$memo !== null && !$refreshIfStale) {
+        if (static::$memo !== null && !$refreshIfStale && (time() - static::$memoAt) < self::MEMO_SECONDS) {
             return static::$memo;
         }
 
@@ -269,7 +274,8 @@ class PriceBook
             }
         }
 
-        static::$memo = $book;
+        static::$memo   = $book;
+        static::$memoAt = time();
 
         return $book;
     }
@@ -299,7 +305,7 @@ class PriceBook
      * Shape matches a saved price_reference row, plus "estimated" and the
      * note that explains where the number came from.
      */
-    public function resolve(string $product, string $unit, string $stage = ''): ?array
+    public function resolve(string $product, string $unit, string $stage = '', string $kind = ''): ?array
     {
         // Nursery fish are quoted per piece, not per kilo, so their rate comes
         // from the seedstock table before any market-size fish price applies.
@@ -328,7 +334,7 @@ class PriceBook
             return $this->fromOwn($product, $unit, $own);
         }
 
-        return $this->estimate($product, $unit, $book);
+        return $this->estimate($product, $unit, $book, $kind);
     }
 
     /** The seedstock rate for one fish stage, if we have one. */
@@ -510,9 +516,9 @@ class PriceBook
      * A starting price for a crop the DA does not list, taken from the average
      * of the closest class of crops it does list.
      */
-    protected function estimate(string $product, string $unit, array $book): ?array
+    protected function estimate(string $product, string $unit, array $book, string $kind = ''): ?array
     {
-        $class   = $this->classOf($product);
+        $class   = $this->classOf($product, $kind);
         $anchors = array_map([$this, 'normalise'], self::CLASS_ANCHORS[$class] ?? []);
 
         $rows = array_values(array_filter($book['items'], function ($item) use ($anchors, $class) {
@@ -603,20 +609,32 @@ class PriceBook
     // Small helpers
     // ---------------------------------------------------------------------
 
-    /** Which priced class of crops this product belongs to. */
-    public function classOf(string $product): string
+    /**
+     * Which priced class this product belongs to.
+     *
+     * The name decides first, but a fish record is never priced as a crop: a
+     * species the lists do not know (BULIG, AYUNGIN, a renamed batch) falls
+     * back to fresh fish instead of the fruit-and-vegetable average.
+     */
+    public function classOf(string $product, string $kind = ''): string
     {
         $name = $this->normalise($product);
+        $fish = $this->isFishKind($kind);
 
         foreach (self::CLASS_WORDS as $class => $words) {
             foreach ($words as $word) {
                 if ($name !== '' && str_contains($name, $word)) {
-                    return $class;
+                    return $fish && !str_starts_with($class, 'fish_') ? 'fish_fresh' : $class;
                 }
             }
         }
 
-        return 'fruit_veg';
+        return $fish ? 'fish_fresh' : 'fruit_veg';
+    }
+
+    protected function isFishKind(string $kind): bool
+    {
+        return strtolower(trim($kind)) === 'fish';
     }
 
     /** True when the farm sells this product by piece rather than by weight. */

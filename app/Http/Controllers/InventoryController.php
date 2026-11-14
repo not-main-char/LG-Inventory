@@ -136,6 +136,14 @@ class InventoryController extends Controller
             }
         }
 
+        // After any deduction, make sure every item that is low right now has a
+        // bell entry, even if its stock has not changed since the rule existed.
+        try {
+            \App\Support\LowStockNotifier::sync($this->firestore);
+        } catch (\Throwable $e) {
+            \Log::error('Low stock notification sync failed: ' . $e->getMessage());
+        }
+
         $items = Cache::remember('inventory_list', 300, function () {
             // Simplified query: Fetch all and filter in PHP to avoid composite index requirements
             // and handle items where 'status' field might be missing.
@@ -744,18 +752,20 @@ class InventoryController extends Controller
                 'lastStockUpdate' => Carbon::now('Asia/Manila'),
             ], ['merge' => true]);
 
-            // Seeds that can no longer cover a planting cycle get their own alert,
-            // so the next harvest is not discovered too late.
-            if (\App\Support\InventoryAlerts::isCritical(array_merge($item, ['currentStock' => $newStock]))) {
+            // Low stock after a deduction is worth a bell entry — for seeds that
+            // means below 50 on hand, for everything else the usual rules.
+            $afterDeduction = array_merge($item, ['currentStock' => $newStock]);
+            if (\App\Support\InventoryAlerts::isLow($afterDeduction)) {
+                $isCriticalNow = \App\Support\InventoryAlerts::isCritical($afterDeduction);
                 $this->firestore->collection('notifications')->newDocument()->set([
                     'userId' => 'all',
-                    'title' => 'Critical Seed Stock',
-                    'message' => ($item['name'] ?? 'Seed') . " is critical ({$newStock} {$item['unit']} left)",
+                    'title' => $isCriticalNow ? 'Critical Stock Alert' : 'Low Stock Alert',
+                    'message' => ($item['name'] ?? 'Stock') . " is " . ($isCriticalNow ? 'critical' : 'low') . " ({$newStock} {$item['unit']} left)",
                     'itemId' => $validated['itemId'],
                     'itemName' => $item['name'] ?? '',
                     'read' => false,
                     'createdAt' => Carbon::now('Asia/Manila'),
-                    'type' => 'critical_stock',
+                    'type' => $isCriticalNow ? 'critical_stock' : 'low_stock',
                 ]);
             }
 

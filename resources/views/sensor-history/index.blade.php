@@ -27,6 +27,15 @@
     </div>
 </div>
 
+<!-- Days of the chosen month that actually have readings -->
+<div id="dayBar" class="mb-6">
+    <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+        <p class="text-sm font-semibold" style="color:var(--color-ink-900)" id="dayMonthLabel"></p>
+        <p class="text-xs" style="color:#9C9377" id="daySummary"></p>
+    </div>
+    <div id="dayChips" class="flex flex-wrap gap-2"></div>
+</div>
+
 <!-- Hour picker: only shown on the Hour tab -->
 <div id="hourBar" class="hidden mb-6">
     <p class="text-sm mb-2" style="color:var(--color-ink-700)">Pick an hour to look at. The small number under each hour is how many readings were logged in it.</p>
@@ -89,6 +98,14 @@
     .gauge-bounds { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: .65rem; color: #9C9377; padding: 0 4px; margin-top: -6px; }
 
     .tank { width: 46px; height: 92px; margin: 0 auto; border: 2px solid var(--color-ink-700); border-radius: 4px; position: relative; overflow: hidden; background: #fff; }
+    .day-chip { display: inline-flex; flex-direction: column; align-items: center; gap: 1px; min-width: 3.6rem; padding: .45rem .55rem .5rem; border: 1px solid #DCD3B6; border-radius: .75rem; background: #fff; line-height: 1.1; cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }
+    .day-chip:hover { border-color: var(--color-forest-600); box-shadow: 0 1px 4px rgba(20,40,30,.08); }
+    .day-chip-wd { font-size: .6rem; text-transform: uppercase; letter-spacing: .08em; color: #9C9377; }
+    .day-chip-day { font-family: var(--font-mono); font-size: 1.05rem; font-weight: 600; color: var(--color-ink-900); }
+    .day-chip small { font-family: var(--font-mono); font-size: .62rem; color: #9C9377; }
+    .day-chip-active { background: var(--color-forest-700); border-color: var(--color-forest-700); }
+    .day-chip-active .day-chip-day, .day-chip-active .day-chip-wd { color: #fff; }
+    .day-chip-active small { color: #E4ECD9; }
     .hour-chip { border: 1px solid #DCD3B6; background: #fff; border-radius: .6rem; padding: .35rem .6rem; text-align: center; min-width: 3.6rem; line-height: 1.15; font-size: .8rem; color: var(--color-ink-900); cursor: pointer; }
     .hour-chip small { display: block; font-family: var(--font-mono); font-size: .65rem; color: #9C9377; }
     .hour-chip:hover:not(:disabled) { border-color: var(--color-forest-600); }
@@ -309,6 +326,63 @@
         if (range === 'hour') { refreshHourChips().then(load); } else { load(); }
     });
 
+    // Highlight the days that hold data: a plain date input can't, so the month
+    // is shown as chips with the reading count under each day.
+    const dayChips = document.getElementById('dayChips');
+    const dayMonthLabel = document.getElementById('dayMonthLabel');
+    const daySummary = document.getElementById('daySummary');
+    let chipsMonth = null;
+
+    function loadDayChips(force) {
+        const month = anchorDate.slice(0, 7);
+        if (!force && chipsMonth === month) return;
+        chipsMonth = month;
+
+        fetch('/sensor-history-days?' + new URLSearchParams({ device, month }).toString())
+            .then(res => res.json())
+            .then(data => {
+                dayChips.innerHTML = '';
+                const days = data.days || {};
+                const keys = Object.keys(days);
+
+                const monthName = new Date(month + '-01T00:00:00')
+                    .toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
+                dayMonthLabel.textContent = monthName;
+
+                if (!keys.length) {
+                    daySummary.textContent = '';
+                    dayChips.innerHTML = '<span class="text-xs text-gray-400">No readings in this month.</span>';
+                    return;
+                }
+
+                const total = keys.reduce((sum, d) => sum + Number(days[d] || 0), 0);
+                daySummary.textContent = keys.length + (keys.length === 1 ? ' day' : ' days') + ' \u00b7 ' + total + ' readings';
+
+                keys.forEach(day => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.dataset.day = day;
+                    btn.className = 'day-chip' + (day === anchorDate ? ' day-chip-active' : '');
+
+                    const weekday = new Date(day + 'T00:00:00')
+                        .toLocaleDateString('en-PH', { weekday: 'short' });
+
+                    btn.innerHTML = '<span class="day-chip-wd">' + weekday + '</span>'
+                        + '<span class="day-chip-day">' + Number(day.slice(8)) + '</span>'
+                        + '<small>' + days[day] + '</small>';
+                    btn.title = days[day] + ' readings on ' + day;
+                    btn.addEventListener('click', () => {
+                        anchorDate = day;
+                        datePicker.value = day;
+                        dayChips.querySelectorAll('.day-chip').forEach(c => c.classList.toggle('day-chip-active', c.dataset.day === day));
+                        if (range === 'hour') { refreshHourChips().then(load); } else { load(); }
+                    });
+                    dayChips.appendChild(btn);
+                });
+            })
+            .catch(err => console.error('Sensor days failed to load:', err));
+    }
+
     document.getElementById('closeDetail').addEventListener('click', () => {
         selectedKey = null;
         detailPanel.classList.add('hidden');
@@ -316,6 +390,7 @@
     });
 
     function load() {
+        loadDayChips();
         const params = new URLSearchParams({ device, range, date: anchorDate });
         if (range === 'hour') params.set('hour', hour);
         fetch('/sensor-history-data?' + params.toString())
@@ -324,7 +399,14 @@
                 latestPayload = data;
                 rangeLabel.textContent = data.range_label;
                 renderTiles();
-                if (selectedKey) renderChart();
+
+                if (selectedKey) {
+                    // The subtitle names the period the chart shows, so it has to
+                    // follow the data (hour switch, date switch), not the moment
+                    // the instrument was first tapped.
+                    detailSubtitle.textContent = ' \u2014 ' + data.range_label;
+                    renderChart();
+                }
             })
             .catch(err => console.error('Sensor history failed to load:', err));
     }

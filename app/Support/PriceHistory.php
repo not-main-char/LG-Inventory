@@ -74,7 +74,7 @@ class PriceHistory
                 'oldPrice' => $old,
                 'newPrice' => $new,
                 'source'   => 'DA Region I',
-                'reason'   => 'DA/PSA update',
+                'reason'   => 'DA Region I update',
                 'asOf'     => $asOf,
             ]);
             $recorded++;
@@ -83,9 +83,23 @@ class PriceHistory
         return $recorded;
     }
 
-    /** Every entry, newest first. */
-    public function all(int $limit = 500): array
+    /**
+     * Every entry, newest first.
+     *
+     * Pass the products the farm actually sells to hide feed movement for
+     * commodities that are only quoted by DA (red onion, chicken, squid) and
+     * never enter this farm's stock or prices.
+     */
+    public function all(int $limit = 500, array $products = []): array
     {
+        $wanted = [];
+        foreach ($products as $product) {
+            $key = $this->nameKey((string) $product);
+            if ($key !== '') {
+                $wanted[$key] = true;
+            }
+        }
+
         $rows = [];
 
         foreach ($this->db->collection(self::COLLECTION)->documents() as $doc) {
@@ -94,6 +108,11 @@ class PriceHistory
             }
 
             $d = $doc->data();
+
+            if ($wanted && !$this->belongsTo($this->nameKey((string) ($d['product'] ?? '')), $wanted)) {
+                continue;
+            }
+
             $when = $this->toDateTime($d['changedAt'] ?? null);
 
             $rows[] = [
@@ -144,6 +163,25 @@ class PriceHistory
         }
 
         return null;
+    }
+
+    /** "PECHAY NATIVE" belongs to a farm product named "PECHAY". */
+    protected function belongsTo(string $key, array $wanted): bool
+    {
+        if ($key === '') {
+            return false;
+        }
+        if (isset($wanted[$key])) {
+            return true;
+        }
+
+        foreach (array_keys($wanted) as $product) {
+            if (str_contains($key, $product) || str_contains($product, $key)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** Feed names differ only in spacing and punctuation; compare them plainly. */

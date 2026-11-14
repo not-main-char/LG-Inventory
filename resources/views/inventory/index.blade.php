@@ -56,7 +56,6 @@
                 <th class="p-3 text-left">Stock / Unit</th>
                 <th class="p-3 text-left">Date Stocked</th>
                 <th class="p-3 text-left">Consumption</th>
-                <th class="p-3 text-left">Days Remaining</th>
                 <th class="p-3 text-left">Actions</th>
             </tr>
         </thead>
@@ -68,7 +67,6 @@
                 $isLow = \App\Support\InventoryAlerts::isLow($data);
                 $isCritical = \App\Support\InventoryAlerts::isCritical($data);
                 $daysLeft = \App\Support\InventoryAlerts::daysRemaining($data);
-                $cyclesLeft = \App\Support\InventoryAlerts::cyclesRemaining($data);
                 $stampClass = $data['type'] === 'fish' ? 'stamp-fish' : ($data['type'] === 'seed' ? 'stamp-seed' : 'stamp-supplies');
             @endphp
             <tr class="border-b border-[#F1ECDC] {{ $isLow ? 'low-stock-row' : '' }}">
@@ -104,20 +102,15 @@
                         Manually Deduction
                     @endif
                 </td>
-                <td class="p-3 align-middle text-sm">
-                    @if($daysLeft !== null)
-                        <span class="figure" style="color: {{ $isLow ? 'var(--color-rust-600)' : 'var(--color-ink-700)' }}">{{ $daysLeft }} days left</span>
-                        @if($isLow)<div class="text-[11px] font-semibold" style="color:var(--color-rust-600)">Won't last the week — restock now</div>@endif
-                    @elseif($cyclesLeft !== null)
-                        <span class="figure" style="color: {{ $isLow ? 'var(--color-rust-600)' : 'var(--color-ink-700)' }}">{{ $cyclesLeft }} cycle(s) left</span>
-                        @if($isLow)<div class="text-[11px] font-semibold" style="color:var(--color-rust-600)">Won't cover next season — restock seeds</div>@endif
-                    @else
-                        <span class="text-gray-400">—</span>
-                    @endif
-                </td>
                 <td class="p-3 align-middle">
                     <div class="flex items-center gap-3 text-sm">
-                        <button onclick="viewHistory('{{ $id }}', '{{ $data['name'] }}')" class="font-medium hover:underline" style="color:var(--color-water-600)">History</button>
+                        <button type="button" onclick="viewHistory(this)"
+                                data-id="{{ $id }}"
+                                data-name="{{ $data['name'] }}"
+                                data-stock="{{ (float) ($data['currentStock'] ?? 0) }}"
+                                data-unit="{{ $data['unit'] ?? '' }}"
+                                data-days="{{ $daysLeft === null ? '' : $daysLeft }}"
+                                class="font-medium hover:underline" style="color:var(--color-water-600)">History</button>
                         @if($role === 'admin')
 	                            <button onclick='editItem(@json(array_merge(["id" => $id], $data)))' class="font-medium hover:underline" style="color:var(--color-forest-700)">Edit</button>
 
@@ -133,7 +126,7 @@
             </tr>
             @endforeach
             @if(count($items) === 0)
-            <tr><td colspan="6" class="p-8 text-center text-sm text-gray-400">No stock recorded yet. Add the first stock to start the ledger.</td></tr>
+            <tr><td colspan="5" class="p-8 text-center text-sm text-gray-400">No stock recorded yet. Add the first stock to start the ledger.</td></tr>
             @endif
         </tbody>
     </table>
@@ -210,7 +203,7 @@
                     <option value="daily">Auto</option>
                     <option value="manual">Manual — self deductioin</option>
                 </select>
-                <p class="text-[11px] text-gray-400 mt-1">Low-stock alerts, Daily items alert when fewer than 7 days of stock remain; Seasonal items alert when stock can't cover the next cycle.</p>
+                <p class="text-[11px] text-gray-400 mt-1">Low-stock alerts: Auto items alert when fewer than 7 days of stock remain; seeds alert below 50 on hand.</p>
             </div>
 
             <!-- DAILY FIELDS -->
@@ -357,7 +350,8 @@
 <!-- History Modal -->
 <div id="historyModal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50 p-4 overflow-y-auto">
     <div class="modal-panel p-6 w-full max-w-md my-8">
-        <h2 class="font-display text-xl font-semibold mb-3" id="historyTitle" style="color:var(--color-ink-900)">Stock History</h2>
+        <h2 class="font-display text-xl font-semibold mb-1" id="historyTitle" style="color:var(--color-ink-900)">Stock History</h2>
+        <p class="text-xs mb-3" id="historyStockLine" style="color:var(--color-ink-700)"></p>
         <div class="flex flex-wrap gap-1.5 mb-3" id="historyFilters">
             <button type="button" data-hfilter="all" onclick="setHistoryFilter('all')" class="text-[11px] font-semibold px-2.5 py-1 rounded-full border" style="border-color:#DCD3B8">All</button>
             <button type="button" data-hfilter="auto" onclick="setHistoryFilter('auto')" class="text-[11px] font-semibold px-2.5 py-1 rounded-full border" style="border-color:#DCD3B8">Auto</button>
@@ -659,6 +653,23 @@
 
     let historyEntries = [];
     let historyFilter = 'all';
+    let historyStock = null;
+    let historyUnit = '';
+    let historyDays = '';
+
+    function trimNum(n) {
+        return String(Math.round(n * 10000) / 10000);
+    }
+
+    // "-3 pcs" / "+5 kg" / "-1.25" -> the signed number, or null when the
+    // entry has no readable amount (very old rows).
+    function signedQty(text) {
+        const m = String(text == null ? '' : text).match(/^\s*([-+]?)\s*([\d.]+)/);
+        if (!m) return null;
+        const value = parseFloat(m[2]);
+        if (!isFinite(value)) return null;
+        return m[1] === '-' ? -value : value;
+    }
 
     // Older entries were saved without a type, so read it from the action text.
     function historyType(h) {
@@ -705,10 +716,19 @@
             return;
         }
 
+        // Entries arrive newest first, so walk backwards from the stock on hand
+        // to show what each entry left behind.
+        let remaining = historyStock;
+
         list.innerHTML = rows.map(function (h) {
             const style = HISTORY_STYLES[historyType(h)];
             const notes = h.notes ? '<p class="text-[11px] text-gray-500 mt-1 italic">' + escHistory(h.notes) + '</p>' : '';
-            return '<div class="border-b border-[#F1ECDC] px-2 py-1.5 rounded-md mb-1" style="background:' + style.row + '">'
+            const qtyText = h.quantity != null ? h.quantity : (h.amount || '');
+            const leftLine = remaining === null
+                ? ''
+                : '<p class="text-[11px] text-gray-500 mt-0.5">' + trimNum(remaining) + ' ' + escHistory(historyUnit) + ' left after this</p>';
+
+            const html = '<div class="border-b border-[#F1ECDC] px-2 py-1.5 rounded-md mb-1" style="background:' + style.row + '">'
                 + '<div class="flex items-center justify-between gap-3">'
                 + '<div class="min-w-0">'
                 + '<div class="flex items-center gap-2">'
@@ -716,18 +736,45 @@
                 + '<p class="text-sm font-medium text-gray-700">' + escHistory(h.action || 'Stock update') + '</p>'
                 + '</div>'
                 + '<p class="text-xs text-gray-400 mt-0.5">' + escHistory(h.date || '') + '</p>'
+                + leftLine
                 + '</div>'
-                + '<span class="figure text-sm whitespace-nowrap">' + escHistory(h.quantity != null ? h.quantity : (h.amount || '')) + '</span>'
+                + '<span class="figure text-sm whitespace-nowrap">' + escHistory(qtyText) + '</span>'
                 + '</div>'
                 + notes
                 + '</div>';
+
+            const delta = signedQty(qtyText);
+            if (remaining !== null && delta !== null) {
+                remaining = Math.round((remaining - delta) * 10000) / 10000;
+            }
+
+            return html;
         }).join('');
     }
 
-    async function viewHistory(id, name) {
+    async function viewHistory(btn) {
+        const id = btn.dataset.id;
+        const name = btn.dataset.name;
         historyEntries = [];
         historyFilter = 'all';
+        historyStock = parseFloat(btn.dataset.stock);
+        if (!isFinite(historyStock)) historyStock = null;
+        historyUnit = btn.dataset.unit || '';
+        historyDays = btn.dataset.days || '';
+
         document.getElementById('historyTitle').innerText = 'Stock History — ' + name;
+
+        const stockLine = document.getElementById('historyStockLine');
+        if (stockLine) {
+            if (historyStock === null) {
+                stockLine.textContent = '';
+            } else {
+                let line = 'Stock on hand: ' + trimNum(historyStock) + ' ' + historyUnit;
+                if (historyDays !== '') line += ' \u00b7 about ' + historyDays + ' days left at the current rate';
+                stockLine.textContent = line;
+            }
+        }
+
         document.getElementById('historyList').innerHTML = '<p class="text-sm text-gray-400">Loading…</p>';
         showModal('historyModal');
         try {

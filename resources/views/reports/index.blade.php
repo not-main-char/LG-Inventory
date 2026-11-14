@@ -20,6 +20,8 @@
                     <option value="">Select report</option>
                     <option value="inventory" @selected($type === 'inventory')>Inventory</option>
                     <option value="sales" @selected($type === 'sales')>Sales</option>
+                    <option value="harvest" @selected($type === 'harvest')>Harvest records</option>
+                    <option value="sensors" @selected($type === 'sensors')>Sensor history</option>
                 </select>
             </div>
             <div>

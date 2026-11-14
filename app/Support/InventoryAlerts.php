@@ -5,6 +5,12 @@ namespace App\Support;
 class InventoryAlerts
 {
     /**
+     * Seeds warn once fewer than this many are left, regardless of frequency,
+     * because a planting cycle cannot be covered with a nearly-empty packet.
+     */
+    public const SEED_LOW_THRESHOLD = 50;
+
+    /**
      * Days remaining for a daily-use item, or null if not applicable.
      */
     public static function daysRemaining(array $data): ?int
@@ -42,7 +48,8 @@ class InventoryAlerts
      * Fully automatic — there is no manually-set threshold anymore.
      *
      *  - Daily-use items: alert when fewer than 7 days of stock remain.
-     *  - Seasonal items: alert when stock can't cover at least 1 more full cycle/season.
+     *  - Seeds: alert below 50 on hand (SEED_LOW_THRESHOLD).
+     *  - Seasonal items (legacy): alert when stock can't cover 1 more cycle.
      *  - Manual items: never auto-alert (no consumption rate to project from).
      */
     /**
@@ -79,6 +86,13 @@ class InventoryAlerts
         $minimum = $data['minStock'] ?? null;
         if ($minimum !== null && $minimum !== '' && (float) $minimum > 0
             && (float) ($data['currentStock'] ?? 0) <= (float) $minimum * 2) {
+            return true;
+        }
+
+        // Seeds: warn below 50 on hand. They are usually manual items, so without
+        // this rule they would only surface once they hit zero.
+        if (($data['type'] ?? '') === 'seed'
+            && (float) ($data['currentStock'] ?? 0) < self::SEED_LOW_THRESHOLD) {
             return true;
         }
 

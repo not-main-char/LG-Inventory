@@ -11,25 +11,46 @@ class FishpondController extends Controller
 {
     protected Database $database;
 
-    // Same device list as Sensor History — records live under devices/{id}/fishpond_records.
-    protected array $devices = [
-        'HYDROLG001' => 'Aquaponics 1',
-        'HYDROLG002' => 'Aquaponics 2',
-    ];
-
     public function __construct(Database $database)
     {
         $this->database = $database;
     }
 
+    /**
+     * Devices that actually have ponds, so a unit that only sends sensor data
+     * (no fishpond_records) does not show an empty pond tab.
+     *
+     * @return array<string, string>
+     */
+    protected function pondDevices(FishStock $stock): array
+    {
+        $found = [];
+
+        foreach ($stock->devices() as $id => $label) {
+            try {
+                $raw = $this->database->getReference("devices/{$id}/fishpond_records")->getValue();
+            } catch (\Throwable $e) {
+                $raw = null;
+            }
+
+            if (is_array($raw) && $raw !== []) {
+                $found[$id] = $label;
+            }
+        }
+
+        return $found !== [] ? $found : $stock->devices();
+    }
+
     public function index(string $device = 'HYDROLG001')
     {
-        if (!array_key_exists($device, $this->devices)) {
+        $devices = $this->pondDevices(app(FishStock::class));
+
+        if (!array_key_exists($device, $devices)) {
             $device = 'HYDROLG001';
         }
 
         return view('fishpond.index', [
-            'devices'      => $this->devices,
+            'devices'      => $devices,
             'activeDevice' => $device,
         ]);
     }
@@ -41,9 +62,10 @@ class FishpondController extends Controller
     public function ponds(FishStock $fishStock)
     {
         $read = $fishStock->batches();
+        $devices = $this->pondDevices($fishStock);
 
         $ponds = [];
-        foreach ($this->devices as $id => $label) {
+        foreach ($devices as $id => $label) {
             $rows = array_values(array_filter($read['batches'], fn ($b) => $b['deviceLabel'] === $label));
 
             $species = [];
@@ -80,7 +102,7 @@ class FishpondController extends Controller
         return view('fishpond.ponds', [
             'ponds'  => $ponds,
             'error'  => $read['error'],
-            'devices' => $this->devices,
+            'devices' => $devices,
         ]);
     }
 
@@ -94,8 +116,9 @@ class FishpondController extends Controller
      */
     public function records(Request $request)
     {
-        $device = (string) $request->get('device', 'HYDROLG001');
-        if (!array_key_exists($device, $this->devices)) {
+        $device  = (string) $request->get('device', 'HYDROLG001');
+        $devices = $this->pondDevices(app(FishStock::class));
+        if (!array_key_exists($device, $devices)) {
             $device = 'HYDROLG001';
         }
 
@@ -164,7 +187,7 @@ class FishpondController extends Controller
 
         return response()->json([
             'device'      => $device,
-            'deviceLabel' => $this->devices[$device],
+            'deviceLabel' => $devices[$device],
             'fetchedAt'   => $now->toIso8601String(),
             'fingerprint' => $fingerprint,
             'summary'     => [

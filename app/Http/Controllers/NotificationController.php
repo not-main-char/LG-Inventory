@@ -50,6 +50,22 @@ class NotificationController extends Controller
                 return $valB <=> $valA;
             });
 
+            // One bell entry per item+type: repeated daily deductions used to
+            // stack identical "low stock" rows. Newest (first) one wins.
+            $seen = [];
+            $unique = [];
+            foreach ($notifList as $entry) {
+                $d = $entry['data'];
+                $itemId = (string) ($d['itemId'] ?? '');
+                $key = $itemId . '|' . ($d['type'] ?? '');
+                if ($itemId !== '' && isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+                $unique[] = $entry;
+            }
+            $notifList = $unique;
+
             // Limit to 20
             $notifList = array_slice($notifList, 0, 20);
             
